@@ -9,11 +9,16 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                println!("accepted new connection");
                 let mut buf = [0; 512];
-                stream.read(&mut buf).unwrap();
 
-                stream.write_all(b"+PONG\r\n").unwrap();
+                loop {
+                    println!("accepted new connection");
+                    let read_count = stream.read(&mut buf).unwrap();
+                    if read_count == 0 {
+                        break;
+                    }
+                    stream.write_all(b"+PONG\r\n").unwrap();
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
