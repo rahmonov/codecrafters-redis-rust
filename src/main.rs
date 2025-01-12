@@ -1,8 +1,8 @@
-use resp::Value;
-use tokio::net::{TcpListener, TcpStream};
 use anyhow::Result;
+use resp::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tokio::net::{TcpListener, TcpStream};
 
 mod resp;
 
@@ -34,31 +34,13 @@ async fn handle_connection(stream: TcpStream, db: Db) {
         println!("Got value {:?}", value);
 
         let response = if let Some(v) = value {
-            let (command, args) = extract_command(v).unwrap(); 
+            let (command, args) = extract_command(v).unwrap();
             match command.as_str() {
                 "PING" => Value::SimpleString("PONG".to_string()),
                 "ECHO" => args.first().unwrap().clone(),
-                "SET" => {
-                    let mut db = db.lock().unwrap();
-
-                    let key = unpack_bulk_str(args[0].clone()).unwrap();
-                    let value = unpack_bulk_str(args[1].clone()).unwrap();
-
-                    db.insert(key, value);
-
-                    Value::SimpleString("OK".to_string())
-                }
-                "GET" => {
-                    let db = db.lock().unwrap();
-                    let key = unpack_bulk_str(args.first().unwrap().clone()).unwrap();
-
-                    if let Some(value) = db.get(&key) {
-                        Value::BulkString(value.to_string())
-                    } else {
-                        Value::NullBulkString
-                    }
-                }
-                c => panic!("Cannot handle command {}", c)
+                "SET" => handle_set(&db, args[0].clone(), args[1].clone()),
+                "GET" => handle_get(&db, args[0].clone()),
+                c => panic!("Cannot handle command {}", c),
             }
         } else {
             break;
@@ -70,14 +52,34 @@ async fn handle_connection(stream: TcpStream, db: Db) {
     }
 }
 
+fn handle_set(db: &Db, key: Value, value: Value) -> Value {
+    let mut db = db.lock().unwrap();
+
+    let key = unpack_bulk_str(key).unwrap();
+    let value = unpack_bulk_str(value).unwrap();
+
+    db.insert(key, value);
+
+    Value::SimpleString("OK".to_string())
+}
+
+fn handle_get(db: &Db, key: Value) -> Value {
+    let db = db.lock().unwrap();
+    let key = unpack_bulk_str(key).unwrap();
+
+    if let Some(value) = db.get(&key) {
+        Value::BulkString(value.to_string())
+    } else {
+        Value::NullBulkString
+    }
+}
+
 fn extract_command(value: Value) -> Result<(String, Vec<Value>)> {
     match value {
-        Value::Array(a) => {
-            Ok((
-                unpack_bulk_str(a.first().unwrap().clone())?,
-                a.into_iter().skip(1).collect(),
-            ))
-        }
+        Value::Array(a) => Ok((
+            unpack_bulk_str(a.first().unwrap().clone())?,
+            a.into_iter().skip(1).collect(),
+        )),
         _ => Err(anyhow::anyhow!("Unexpected command format")),
     }
 }
@@ -85,6 +87,6 @@ fn extract_command(value: Value) -> Result<(String, Vec<Value>)> {
 fn unpack_bulk_str(value: Value) -> Result<String> {
     match value {
         Value::BulkString(s) => Ok(s),
-        _ => Err(anyhow::anyhow!("Expected command to be a bulk string"))
+        _ => Err(anyhow::anyhow!("Expected command to be a bulk string")),
     }
 }
