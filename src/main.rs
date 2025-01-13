@@ -2,11 +2,12 @@ use anyhow::Result;
 use resp::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
 
 mod resp;
 
-type Db = Arc<Mutex<HashMap<String, String>>>;
+type Db = Arc<Mutex<HashMap<String, (String, Option<Duration>)>>>;
 
 #[tokio::main]
 async fn main() {
@@ -38,7 +39,7 @@ async fn handle_connection(stream: TcpStream, db: Db) {
             match command.as_str() {
                 "PING" => Value::SimpleString("PONG".to_string()),
                 "ECHO" => args.first().unwrap().clone(),
-                "SET" => handle_set(&db, args[0].clone(), args[1].clone()),
+                "SET" => handle_set(&db, &args),
                 "GET" => handle_get(&db, args[0].clone()),
                 c => panic!("Cannot handle command {}", c),
             }
@@ -52,13 +53,28 @@ async fn handle_connection(stream: TcpStream, db: Db) {
     }
 }
 
-fn handle_set(db: &Db, key: Value, value: Value) -> Value {
+fn handle_set(db: &Db, args: &[Value]) -> Value {
     let mut db = db.lock().unwrap();
 
-    let key = unpack_bulk_str(key).unwrap();
-    let value = unpack_bulk_str(value).unwrap();
+    let key = unpack_bulk_str(args[0].clone()).unwrap();
+    let value = unpack_bulk_str(args[1].clone()).unwrap();
 
-    db.insert(key, value);
+    let px = if args.len() > 2 {
+        let command_name = unpack_bulk_str(args[2].clone()).unwrap();
+        if command_name != "px" {
+            panic!("wrong precision name!");
+        }
+
+        let ms_str = unpack_bulk_str(args[3].clone()).unwrap();
+        let ms = ms_str.parse::<u64>().unwrap();
+        let now = SystemTime::now();
+        let since_the_epoch = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
+        Some(since_the_epoch + Duration::from_millis(ms))
+    } else {
+        None
+    };
+
+    db.insert(key, (value, px));
 
     Value::SimpleString("OK".to_string())
 }
@@ -67,10 +83,24 @@ fn handle_get(db: &Db, key: Value) -> Value {
     let db = db.lock().unwrap();
     let key = unpack_bulk_str(key).unwrap();
 
-    if let Some(value) = db.get(&key) {
-        Value::BulkString(value.to_string())
-    } else {
-        Value::NullBulkString
+    match db.get(&key) {
+        Some((value, expiry_time)) => {
+            let result = Value::BulkString(value.to_string());
+
+            match expiry_time {
+                Some(expiry_time) => {
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+                    if expiry_time < &now {
+                        return Value::NullBulkString;
+                    }
+
+                    result
+                }
+                None => result,
+            }
+        }
+        None => Value::NullBulkString,
     }
 }
 
