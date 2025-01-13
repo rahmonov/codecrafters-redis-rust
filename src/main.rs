@@ -2,12 +2,19 @@ use anyhow::Result;
 use resp::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
 
 mod resp;
 
-type Db = Arc<Mutex<HashMap<String, (String, Option<Duration>)>>>;
+#[derive(Debug)]
+pub struct DbItem {
+    value: String,
+    created: Instant,
+    expires: usize,
+}
+
+type Db = Arc<Mutex<HashMap<String, DbItem>>>;
 
 #[tokio::main]
 async fn main() {
@@ -59,22 +66,25 @@ fn handle_set(db: &Db, args: &[Value]) -> Value {
     let key = unpack_bulk_str(args[0].clone()).unwrap();
     let value = unpack_bulk_str(args[1].clone()).unwrap();
 
-    let px = if args.len() > 2 {
+    let expires = if args.len() > 2 {
         let command_name = unpack_bulk_str(args[2].clone()).unwrap();
         if command_name != "px" {
             panic!("wrong precision name!");
         }
 
         let ms_str = unpack_bulk_str(args[3].clone()).unwrap();
-        let ms = ms_str.parse::<u64>().unwrap();
-        let now = SystemTime::now();
-        let since_the_epoch = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
-        Some(since_the_epoch + Duration::from_millis(ms))
+        ms_str.parse::<usize>().unwrap()
     } else {
-        None
+        0
     };
 
-    db.insert(key, (value, px));
+    let item = DbItem {
+        value,
+        expires,
+        created: Instant::now(),
+    };
+
+    db.insert(key, item);
 
     Value::SimpleString("OK".to_string())
 }
@@ -84,20 +94,15 @@ fn handle_get(db: &Db, key: Value) -> Value {
     let key = unpack_bulk_str(key).unwrap();
 
     match db.get(&key) {
-        Some((value, expiry_time)) => {
-            let result = Value::BulkString(value.to_string());
+        Some(db_item) => {
+            let result = Value::BulkString(db_item.value.to_string());
 
-            match expiry_time {
-                Some(expiry_time) => {
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            let is_expired = db_item.expires > 0
+                && db_item.created.elapsed().as_millis() > db_item.expires as u128;
 
-                    if expiry_time < &now {
-                        return Value::NullBulkString;
-                    }
-
-                    result
-                }
-                None => result,
+            match is_expired {
+                true => Value::NullBulkString,
+                false => result,
             }
         }
         None => Value::NullBulkString,
