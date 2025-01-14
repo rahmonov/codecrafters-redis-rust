@@ -17,7 +17,15 @@ impl Value {
             Value::SimpleString(s) => format!("+{}\r\n", s),
             Value::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),
             Value::NullBulkString => "$-1\r\n".to_string(),
-            _ => panic!("Unsupported value for serialize"),
+            Value::Array(values) => format!(
+                "*{}\r\n{}",
+                values.len(),
+                values
+                    .into_iter()
+                    .map(|val| val.serialize())
+                    .collect::<Vec<String>>()
+                    .join("")
+            ),
         }
     }
 }

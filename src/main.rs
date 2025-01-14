@@ -1,6 +1,7 @@
 use anyhow::Result;
 use resp::Value;
 use std::collections::HashMap;
+use std::env;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
@@ -15,24 +16,40 @@ pub struct DbItem {
 }
 
 type Db = Arc<Mutex<HashMap<String, DbItem>>>;
+type Config = Arc<Mutex<HashMap<String, String>>>;
 
 #[tokio::main]
 async fn main() {
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
-    let db = Arc::new(Mutex::new(HashMap::new()));
+    let args: Vec<String> = env::args().collect();
+
+    let db: Db = Arc::new(Mutex::new(HashMap::new()));
+    let config: Config = Arc::new(Mutex::new(HashMap::new()));
+
+    if args.len() > 2 && (args[1] == "--dir" || args[3] == "--dbfilename") {
+        config
+            .lock()
+            .unwrap()
+            .insert("dir".to_string(), args[2].to_string());
+        config
+            .lock()
+            .unwrap()
+            .insert("dbfilename".to_string(), args[4].to_string());
+    }
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();
         let db = db.clone();
+        let config = config.clone();
 
         tokio::spawn(async {
-            handle_connection(stream, db).await;
+            handle_connection(stream, db, config).await;
         });
     }
 }
 
-async fn handle_connection(stream: TcpStream, db: Db) {
+async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
     let mut handler = resp::RespHandler::new(stream);
     println!("accepted new connection");
 
@@ -48,6 +65,7 @@ async fn handle_connection(stream: TcpStream, db: Db) {
                 "ECHO" => args.first().unwrap().clone(),
                 "SET" => handle_set(&db, &args),
                 "GET" => handle_get(&db, args[0].clone()),
+                "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
                 c => panic!("Cannot handle command {}", c),
             }
         } else {
@@ -57,6 +75,23 @@ async fn handle_connection(stream: TcpStream, db: Db) {
         println!("Sending value {:?}", response);
 
         handler.write_value(response).await.unwrap();
+    }
+}
+
+fn handle_config(config: &Config, config_command: Value, config_key: Value) -> Value {
+    let config_command = unpack_bulk_str(config_command).unwrap();
+
+    match config_command.as_str() {
+        "GET" => {
+            let config = config.lock().unwrap();
+            let config_key_name = unpack_bulk_str(config_key.clone()).unwrap();
+
+            Value::Array(vec![
+                config_key,
+                Value::BulkString(config.get(&config_key_name).unwrap().to_string()),
+            ])
+        }
+        _ => Value::NullBulkString,
     }
 }
 
