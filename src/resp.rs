@@ -1,9 +1,7 @@
-use bytes::BytesMut;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::Result;
-
-
+use bytes::BytesMut;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -18,8 +16,8 @@ impl Value {
         match self {
             Value::SimpleString(s) => format!("+{}\r\n", s),
             Value::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),
-            Value::NullBulkString => format!("$-1\r\n"),
-            _ => panic!("Unsupported value for serialize")
+            Value::NullBulkString => "$-1\r\n".to_string(),
+            _ => panic!("Unsupported value for serialize"),
         }
     }
 }
@@ -33,15 +31,15 @@ impl RespHandler {
     pub fn new(stream: TcpStream) -> Self {
         RespHandler {
             stream,
-            buffer: BytesMut::with_capacity(512)
+            buffer: BytesMut::with_capacity(512),
         }
     }
 
     pub async fn read_value(&mut self) -> Result<Option<Value>> {
         let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
-    
+
         if bytes_read == 0 {
-            return Ok(None)
+            return Ok(None);
         }
 
         let (v, _) = parse_message(self.buffer.split())?;
@@ -49,7 +47,7 @@ impl RespHandler {
     }
 
     pub async fn write_value(&mut self, value: Value) -> Result<()> {
-        self.stream.write(value.serialize().as_bytes()).await?;
+        self.stream.write_all(value.serialize().as_bytes()).await?;
 
         Ok(())
     }
@@ -68,20 +66,21 @@ fn parse_simple_string(buffer: BytesMut) -> Result<(Value, usize)> {
     if let Some((line, len)) = read_until_crlf(&buffer[1..]) {
         let string = String::from_utf8(line.to_vec()).unwrap();
 
-        return Ok((Value::SimpleString(string), len + 1))
+        return Ok((Value::SimpleString(string), len + 1));
     }
 
-    return Err(anyhow::anyhow!("Invalid string {:?}", buffer))
+    Err(anyhow::anyhow!("Invalid string {:?}", buffer))
 }
 
 fn parse_array(buffer: BytesMut) -> Result<(Value, usize)> {
-    let (array_length, mut bytes_consumed) = if let Some((line, len)) = read_until_crlf(&buffer[1..]) {
-        let array_length = parse_int(line)?;
+    let (array_length, mut bytes_consumed) =
+        if let Some((line, len)) = read_until_crlf(&buffer[1..]) {
+            let array_length = parse_int(line)?;
 
-        (array_length, len + 1)
-    } else {
-        return Err(anyhow::anyhow!("Invalid array format {:?}", buffer))
-    };
+            (array_length, len + 1)
+        } else {
+            return Err(anyhow::anyhow!("Invalid array format {:?}", buffer));
+        };
 
     let mut items = vec![];
     for _ in 0..array_length {
@@ -90,7 +89,7 @@ fn parse_array(buffer: BytesMut) -> Result<(Value, usize)> {
         bytes_consumed += len;
     }
 
-    return Ok((Value::Array(items), bytes_consumed))
+    Ok((Value::Array(items), bytes_consumed))
 }
 
 fn parse_bulk_string(buffer: BytesMut) -> Result<(Value, usize)> {
@@ -101,17 +100,22 @@ fn parse_bulk_string(buffer: BytesMut) -> Result<(Value, usize)> {
     } else {
         return Err(anyhow::anyhow!("Invalid array format: {:?}", buffer));
     };
-    
+
     let end_of_bulk_str = bytes_consumed + bulk_str_len as usize;
     let total_parsed = end_of_bulk_str + 2;
 
-    Ok((Value::BulkString(String::from_utf8(buffer[bytes_consumed..end_of_bulk_str].to_vec())?), total_parsed))
+    Ok((
+        Value::BulkString(String::from_utf8(
+            buffer[bytes_consumed..end_of_bulk_str].to_vec(),
+        )?),
+        total_parsed,
+    ))
 }
 
 fn read_until_crlf(buffer: &[u8]) -> Option<(&[u8], usize)> {
     for i in 1..buffer.len() {
         if buffer[i - 1] == b'\r' && buffer[i] == b'\n' {
-            return Some((&buffer[0..(i-1)], i + 1))
+            return Some((&buffer[0..(i - 1)], i + 1));
         }
     }
 
@@ -121,4 +125,3 @@ fn read_until_crlf(buffer: &[u8]) -> Option<(&[u8], usize)> {
 fn parse_int(buffer: &[u8]) -> Result<i64> {
     Ok(String::from_utf8(buffer.to_vec())?.parse::<i64>()?)
 }
-
