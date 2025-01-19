@@ -90,7 +90,8 @@ fn parse_array(buffer: BytesMut) -> Result<(Value, usize)> {
             return Err(anyhow::anyhow!("Invalid array format {:?}", buffer));
         };
 
-    let mut items = vec![];
+    let mut items = Vec::with_capacity(array_length as usize);
+
     for _ in 0..array_length {
         let (array_item, len) = parse_message(BytesMut::from(&buffer[bytes_consumed..]))?;
         items.push(array_item);
