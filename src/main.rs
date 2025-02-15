@@ -1,7 +1,7 @@
 use anyhow::Result;
+use clap::Parser;
 use resp::Value;
 use std::collections::HashMap;
-use std::env;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
@@ -38,19 +38,26 @@ impl DbItem {
 type Db = Arc<Mutex<HashMap<String, DbItem>>>;
 type Config = Arc<Mutex<HashMap<String, String>>>;
 
+#[derive(Parser)]
+struct ServiceArguments {
+    #[arg(long)]
+    dir: Option<String>,
+
+    #[arg(long)]
+    dbfilename: Option<String>,
+
+    #[arg(long)]
+    port: Option<usize>,
+}
+
 #[tokio::main]
 async fn main() {
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
-
-    let args: Vec<String> = env::args().collect();
+    let args = ServiceArguments::parse();
 
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
 
-    if args.len() > 2 && (args[1] == "--dir" || args[3] == "--dbfilename") {
-        let dir = args[2].to_string();
-        let dbfilename = args[4].to_string();
-
+    if let (Some(dir), Some(dbfilename)) = (args.dir, args.dbfilename) {
         config
             .lock()
             .unwrap()
@@ -67,6 +74,15 @@ async fn main() {
         let mut db = db.lock().unwrap();
         *db = rdb_contents;
     }
+
+    let port = match args.port {
+        Some(port) => port,
+        _ => 6379,
+    };
+
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();
