@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::Result;
 use tokio::{
@@ -36,34 +40,44 @@ pub async fn parse_database_section(
 
     let mut result: HashMap<String, crate::DbItem> = HashMap::new();
 
-    for _ in 0..num_kvs - num_kvs_with_expiry {
-        let _value_type = reader.read_u8().await?;
-        let key = decode_string(reader).await?;
-        let value = decode_string(reader).await?;
-        result.insert(key, crate::DbItem::new(value, Instant::now(), 0));
-    }
-
     for _ in 0..num_kvs_with_expiry {
         let expiry_type = reader.read_u8().await?;
         let expiry = match expiry_type {
             0xFC => {
-                let expiry = reader.read_u64().await?;
+                let expiry = reader.read_u64_le().await?;
                 expiry
             }
             0xFD => {
-                let expiry = reader.read_u32().await?;
+                let expiry = reader.read_u32_le().await?;
                 expiry as u64
             }
             _ => Err(anyhow::anyhow!("invalid expiry type"))?,
         };
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
         let _value_type = reader.read_u8().await?;
         let key = decode_string(reader).await?;
         let value = decode_string(reader).await?;
+
+        if expiry < now {
+            continue;
+        }
+
         result.insert(
             key,
-            crate::DbItem::new(value, Instant::now(), expiry as usize),
+            crate::DbItem::new(value, Instant::now(), (expiry - now) as usize),
         );
+    }
+
+    for _ in 0..num_kvs - num_kvs_with_expiry {
+        let _value_type = reader.read_u8().await?;
+        let key = decode_string(reader).await?;
+        let value = decode_string(reader).await?;
+        result.insert(key, crate::DbItem::new(value, Instant::now(), 0));
     }
 
     Ok(result)

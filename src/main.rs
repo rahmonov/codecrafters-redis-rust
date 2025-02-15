@@ -64,7 +64,6 @@ async fn main() {
         let path = Path::new(&filename);
 
         let rdb_contents = db::parse_rdb_file(path.to_path_buf()).await.unwrap();
-
         let mut db = db.lock().unwrap();
         *db = rdb_contents;
     }
@@ -111,7 +110,6 @@ async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
 }
 
 fn handle_keys(db: &Db) -> Value {
-    println!("inside the keys command handler");
     let db = db.lock().unwrap();
 
     Value::Array(
