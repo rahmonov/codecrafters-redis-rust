@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::Instant;
 
 mod db;
 mod resp;
@@ -18,7 +18,15 @@ pub struct DbItem {
 }
 
 impl DbItem {
-    fn default() -> Self {
+    fn new(value: String, created: Instant, expires: usize) -> Self {
+        Self {
+            value,
+            created,
+            expires,
+        }
+    }
+
+    fn _default() -> Self {
         Self {
             value: String::default(),
             expires: 0,
@@ -55,11 +63,10 @@ async fn main() {
         let filename = format!("{dir}/{dbfilename}");
         let path = Path::new(&filename);
 
-        let keys = db::get_rdb_keys(path.to_path_buf()).await.unwrap();
+        let rdb_contents = db::parse_rdb_file(path.to_path_buf()).await.unwrap();
 
-        keys.iter().for_each(|key| {
-            db.lock().unwrap().insert(key.clone(), DbItem::default());
-        });
+        let mut db = db.lock().unwrap();
+        *db = rdb_contents;
     }
 
     loop {

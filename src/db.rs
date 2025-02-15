@@ -1,42 +1,46 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Result;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    time::Instant,
 };
 
-pub async fn get_rdb_keys(rdb_file: PathBuf) -> Result<Vec<String>> {
+pub async fn parse_rdb_file(rdb_file: PathBuf) -> Result<HashMap<String, crate::DbItem>> {
     if !rdb_file.exists() {
-        return Ok(Vec::new());
+        return Ok(HashMap::new());
     }
 
     let file = File::open(rdb_file).await?;
     let mut reader = BufReader::new(file);
-    let mut keys = Vec::new();
+
+    let mut rdb_contents = HashMap::new();
     while let Ok(section_type) = reader.read_u8().await {
         if section_type == 0xFF {
             break;
         }
-        keys.extend(parse_database_section(&mut reader).await?);
+        rdb_contents.extend(parse_database_section(&mut reader).await?);
     }
 
-    Ok(keys)
+    Ok(rdb_contents)
 }
 
-pub async fn parse_database_section(reader: &mut BufReader<File>) -> Result<Vec<String>> {
+pub async fn parse_database_section(
+    reader: &mut BufReader<File>,
+) -> Result<HashMap<String, crate::DbItem>> {
     let mut buffer = Vec::with_capacity(4);
     let _ = reader.read_until(0xFB, &mut buffer).await?;
     let num_kvs = parse_size_encoding(reader).await?;
     let num_kvs_with_expiry = parse_size_encoding(reader).await?;
 
-    let mut keybuf: Vec<String> = Vec::with_capacity(num_kvs);
+    let mut result: HashMap<String, crate::DbItem> = HashMap::new();
 
     for _ in 0..num_kvs - num_kvs_with_expiry {
-        let value_type = reader.read_u8().await?;
+        let _value_type = reader.read_u8().await?;
         let key = decode_string(reader).await?;
         let value = decode_string(reader).await?;
-        keybuf.push(key);
+        result.insert(key, crate::DbItem::new(value, Instant::now(), 0));
     }
 
     for _ in 0..num_kvs_with_expiry {
@@ -44,22 +48,25 @@ pub async fn parse_database_section(reader: &mut BufReader<File>) -> Result<Vec<
         let expiry = match expiry_type {
             0xFC => {
                 let expiry = reader.read_u64().await?;
-                Some(expiry)
+                expiry
             }
             0xFD => {
                 let expiry = reader.read_u32().await?;
-                Some(expiry as u64)
+                expiry as u64
             }
             _ => Err(anyhow::anyhow!("invalid expiry type"))?,
         };
 
-        let value_type = reader.read_u8().await?;
+        let _value_type = reader.read_u8().await?;
         let key = decode_string(reader).await?;
         let value = decode_string(reader).await?;
-        keybuf.push(key);
+        result.insert(
+            key,
+            crate::DbItem::new(value, Instant::now(), expiry as usize),
+        );
     }
 
-    Ok(keybuf)
+    Ok(result)
 }
 
 async fn decode_string(reader: &mut BufReader<File>) -> Result<String> {
