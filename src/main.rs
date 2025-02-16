@@ -73,6 +73,8 @@ async fn main() {
         let rdb_contents = db::parse_rdb_file(path.to_path_buf()).await.unwrap();
         let mut db = db.lock().unwrap();
         *db = rdb_contents;
+
+        println!("Loaded the RDB file successfully");
     }
 
     let port = match args.port {
@@ -83,6 +85,8 @@ async fn main() {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
         .unwrap();
+
+    println!("Ready to roll!");
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();
@@ -97,22 +101,23 @@ async fn main() {
 
 async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
     let mut handler = resp::RespHandler::new(stream);
-    println!("accepted new connection");
+    println!("Handling new request...");
 
     loop {
         let value = handler.read_value().await.unwrap();
 
-        println!("Got value {:?}", value);
+        println!("Got request value value {:?}", value);
 
         let response = if let Some(v) = value {
             let (command, args) = extract_command(v).unwrap();
-            match command.as_str() {
+            match command.to_uppercase().as_str() {
                 "PING" => Value::SimpleString("PONG".to_string()),
                 "ECHO" => args.first().unwrap().clone(),
                 "SET" => handle_set(&db, &args),
                 "GET" => handle_get(&db, args[0].clone()),
                 "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
                 "KEYS" => handle_keys(&db),
+                "INFO" => handle_info(),
                 c => panic!("Cannot handle command {}", c),
             }
         } else {
@@ -123,6 +128,10 @@ async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
 
         handler.write_value(response).await.unwrap();
     }
+}
+
+fn handle_info() -> Value {
+    Value::BulkString("role:master".to_string())
 }
 
 fn handle_keys(db: &Db) -> Value {
