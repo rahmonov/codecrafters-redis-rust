@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use core::fmt;
 use resp::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,7 +38,37 @@ impl DbItem {
 
 type Db = Arc<Mutex<HashMap<String, DbItem>>>;
 type Config = Arc<Mutex<HashMap<String, String>>>;
-type ReplicationConfig = Arc<Mutex<HashMap<String, String>>>;
+
+enum ReplRole {
+    Master,
+    Slave,
+}
+
+impl fmt::Display for ReplRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplRole::Master => write!(f, "master"),
+            ReplRole::Slave => write!(f, "slave"),
+        }
+    }
+}
+
+struct ReplConfig {
+    role: ReplRole,
+    master_replid: Option<String>,
+    master_repl_offset: Option<usize>,
+}
+
+impl ReplConfig {
+    fn default() -> Self {
+        ReplConfig {
+            role: ReplRole::Master,
+            master_replid: None,
+            master_repl_offset: None,
+        }
+    }
+}
+type SharedReplicationConfig = Arc<Mutex<ReplConfig>>;
 
 #[derive(Parser)]
 struct ServiceArguments {
@@ -60,7 +91,7 @@ async fn main() {
 
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
-    let replication_config: ReplicationConfig = Arc::new(Mutex::new(HashMap::new()));
+    let shared_repl_conf: SharedReplicationConfig = Arc::new(Mutex::new(ReplConfig::default()));
 
     if let (Some(dir), Some(dbfilename)) = (args.dir, args.dbfilename) {
         config
@@ -84,16 +115,12 @@ async fn main() {
 
     match args.replicaof {
         Some(_replicaof) => {
-            replication_config
-                .lock()
-                .unwrap()
-                .insert("role".to_string(), "slave".to_string());
+            shared_repl_conf.lock().unwrap().role = ReplRole::Slave;
         }
-        _ => {
-            replication_config
-                .lock()
-                .unwrap()
-                .insert("role".to_string(), "master".to_string());
+        None => {
+            let mut repl_conf = shared_repl_conf.lock().unwrap();
+            repl_conf.master_replid = Some("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string());
+            repl_conf.master_repl_offset = Some(0);
         }
     }
 
@@ -112,10 +139,10 @@ async fn main() {
         let (stream, _) = listener.accept().await.unwrap();
         let db = db.clone();
         let config = config.clone();
-        let replication_config = replication_config.clone();
+        let shared_repl_conf = shared_repl_conf.clone();
 
         tokio::spawn(async {
-            handle_connection(stream, db, config, replication_config).await;
+            handle_connection(stream, db, config, shared_repl_conf).await;
         });
     }
 }
@@ -124,7 +151,7 @@ async fn handle_connection(
     stream: TcpStream,
     db: Db,
     config: Config,
-    replication_config: ReplicationConfig,
+    shared_repl_conf: SharedReplicationConfig,
 ) {
     let mut handler = resp::RespHandler::new(stream);
     println!("Handling new request...");
@@ -143,7 +170,7 @@ async fn handle_connection(
                 "GET" => handle_get(&db, args[0].clone()),
                 "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
                 "KEYS" => handle_keys(&db),
-                "INFO" => handle_info(&replication_config),
+                "INFO" => handle_info(&shared_repl_conf),
                 c => panic!("Cannot handle command {}", c),
             }
         } else {
@@ -156,14 +183,25 @@ async fn handle_connection(
     }
 }
 
-fn handle_info(replication_config: &ReplicationConfig) -> Value {
-    let mut repl_conf = replication_config.lock().unwrap();
+fn handle_info(replication_config: &SharedReplicationConfig) -> Value {
+    let repl_conf = replication_config.lock().unwrap();
+    let mut result_values = vec![format!("role:{}", repl_conf.role)];
 
-    let role = repl_conf
-        .entry("role".to_string())
-        .or_insert("master".to_string());
+    match repl_conf.role {
+        ReplRole::Master => {
+            let master_replid = repl_conf.master_replid.as_ref().unwrap();
+            let master_repl_offset = repl_conf.master_repl_offset.as_ref().unwrap();
 
-    Value::BulkString(format!("role:{}", role))
+            result_values.push(format!("master_replid:{}", master_replid.to_string()));
+            result_values.push(format!(
+                "master_repl_offset:{}",
+                master_repl_offset.to_string()
+            ));
+        }
+        ReplRole::Slave => {}
+    }
+
+    Value::BulkString(result_values.join("\r\n"))
 }
 
 fn handle_keys(db: &Db) -> Value {
