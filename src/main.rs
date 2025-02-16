@@ -37,6 +37,7 @@ impl DbItem {
 
 type Db = Arc<Mutex<HashMap<String, DbItem>>>;
 type Config = Arc<Mutex<HashMap<String, String>>>;
+type ReplicationConfig = Arc<Mutex<HashMap<String, String>>>;
 
 #[derive(Parser)]
 struct ServiceArguments {
@@ -48,6 +49,9 @@ struct ServiceArguments {
 
     #[arg(long)]
     port: Option<usize>,
+
+    #[arg(long)]
+    replicaof: Option<String>,
 }
 
 #[tokio::main]
@@ -56,6 +60,7 @@ async fn main() {
 
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
+    let replication_config: ReplicationConfig = Arc::new(Mutex::new(HashMap::new()));
 
     if let (Some(dir), Some(dbfilename)) = (args.dir, args.dbfilename) {
         config
@@ -77,6 +82,21 @@ async fn main() {
         println!("Loaded the RDB file successfully");
     }
 
+    match args.replicaof {
+        Some(_replicaof) => {
+            replication_config
+                .lock()
+                .unwrap()
+                .insert("role".to_string(), "slave".to_string());
+        }
+        _ => {
+            replication_config
+                .lock()
+                .unwrap()
+                .insert("role".to_string(), "master".to_string());
+        }
+    }
+
     let port = match args.port {
         Some(port) => port,
         _ => 6379,
@@ -92,14 +112,20 @@ async fn main() {
         let (stream, _) = listener.accept().await.unwrap();
         let db = db.clone();
         let config = config.clone();
+        let replication_config = replication_config.clone();
 
         tokio::spawn(async {
-            handle_connection(stream, db, config).await;
+            handle_connection(stream, db, config, replication_config).await;
         });
     }
 }
 
-async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
+async fn handle_connection(
+    stream: TcpStream,
+    db: Db,
+    config: Config,
+    replication_config: ReplicationConfig,
+) {
     let mut handler = resp::RespHandler::new(stream);
     println!("Handling new request...");
 
@@ -117,7 +143,7 @@ async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
                 "GET" => handle_get(&db, args[0].clone()),
                 "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
                 "KEYS" => handle_keys(&db),
-                "INFO" => handle_info(),
+                "INFO" => handle_info(&replication_config),
                 c => panic!("Cannot handle command {}", c),
             }
         } else {
@@ -130,8 +156,14 @@ async fn handle_connection(stream: TcpStream, db: Db, config: Config) {
     }
 }
 
-fn handle_info() -> Value {
-    Value::BulkString("role:master".to_string())
+fn handle_info(replication_config: &ReplicationConfig) -> Value {
+    let mut repl_conf = replication_config.lock().unwrap();
+
+    let role = repl_conf
+        .entry("role".to_string())
+        .or_insert("master".to_string());
+
+    Value::BulkString(format!("role:{}", role))
 }
 
 fn handle_keys(db: &Db) -> Value {
