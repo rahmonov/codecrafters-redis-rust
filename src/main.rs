@@ -22,10 +22,8 @@ type Config = Arc<Mutex<HashMap<String, String>>>;
 async fn main() {
     let args = ServiceArguments::parse();
 
-    // todo: build the inner type first and only then create the shared types
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
-    let shared_repl_conf: SharedReplicationConfig = Arc::new(Mutex::new(ReplConfig::default()));
 
     if let (Some(dir), Some(dbfilename)) = (args.dir, args.dbfilename) {
         config
@@ -47,16 +45,19 @@ async fn main() {
         println!("Loaded the RDB file successfully");
     }
 
+    let mut repl_config = ReplConfig::default();
     match args.replicaof {
         Some(_replicaof) => {
-            shared_repl_conf.lock().unwrap().role = ReplRole::Slave;
+            repl_config.role = ReplRole::Slave;
         }
         None => {
-            let mut repl_conf = shared_repl_conf.lock().unwrap();
-            repl_conf.master_replid = Some("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string());
-            repl_conf.master_repl_offset = Some(0);
+            repl_config.master_replid =
+                Some("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string());
+            repl_config.master_repl_offset = Some(0);
         }
     }
+
+    let shared_repl_conf: SharedReplicationConfig = Arc::new(Mutex::new(repl_config));
 
     let port = match args.port {
         Some(port) => port,
