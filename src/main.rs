@@ -3,10 +3,12 @@ use clap::Parser;
 use db::{Db, DbItem};
 use handlers::handle_connection;
 use repl::{ReplConfig, ReplRole, SharedReplicationConfig};
+use resp::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokio::net::TcpListener;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 
 mod args;
 mod db;
@@ -46,8 +48,31 @@ async fn main() {
     }
 
     let mut repl_config = ReplConfig::default();
+
     match args.replicaof {
-        Some(_replicaof) => {
+        Some(replicaof) => {
+            let master_addr = match replicaof.split_whitespace().collect::<Vec<_>>() {
+                ref parts if parts.len() == 2 => {
+                    format!("{}:{}", parts[0], parts[1])
+                }
+                _ => panic!("invalid master address"),
+            };
+
+            if let Ok(mut stream) = TcpStream::connect(&master_addr).await {
+                println!("Connected to the master server: {}", master_addr);
+                println!("Sending PING");
+
+                let ping = Value::Array(vec![Value::BulkString("PING".to_string())]).serialize();
+                stream
+                    .write_all(ping.as_bytes())
+                    .await
+                    .expect("PING didn't succeed");
+
+                println!("PING to master succeeded");
+            } else {
+                panic!("couldn't connect to the master server: {}", master_addr);
+            }
+
             repl_config.role = ReplRole::Slave;
         }
         None => {
