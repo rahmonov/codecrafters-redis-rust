@@ -6,6 +6,48 @@ use anyhow::Result;
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 
+pub async fn handle_connection(
+    stream: TcpStream,
+    db: Db,
+    config: Config,
+    shared_repl_conf: SharedReplicationConfig,
+) {
+    let mut handler = RespHandler::new(stream);
+    println!("Handling new request...");
+
+    loop {
+        let value = handler.read_value().await.unwrap();
+
+        println!("Got request value {:?}", value);
+
+        let response = if let Some(v) = value {
+            let (command, args) = extract_command(v).unwrap();
+            match command.to_uppercase().as_str() {
+                "PING" => Value::SimpleString("PONG".to_string()),
+                "ECHO" => args.first().unwrap().clone(),
+                "SET" => handle_set(&db, &args),
+                "GET" => handle_get(&db, args[0].clone()),
+                "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
+                "KEYS" => handle_keys(&db),
+                "INFO" => handle_info(&shared_repl_conf),
+                "REPLCONF" => handle_replconf(),
+                c => panic!("Cannot handle command {}", c),
+            }
+        } else {
+            println!("got nothing, breaking");
+            break;
+        };
+
+        println!("Sending value {:?}", response);
+
+        handler.write_value(response).await.unwrap();
+    }
+}
+
+fn handle_replconf() -> Value {
+    Value::SimpleString("OK".to_string())
+}
+
 pub fn handle_info(replication_config: &SharedReplicationConfig) -> Value {
     let repl_conf = replication_config.lock().unwrap();
     let mut result_values = vec![format!("role:{}", repl_conf.role)];
@@ -100,42 +142,6 @@ pub fn handle_get(db: &Db, key: Value) -> Value {
             }
         }
         None => Value::NullBulkString,
-    }
-}
-
-pub async fn handle_connection(
-    stream: TcpStream,
-    db: Db,
-    config: Config,
-    shared_repl_conf: SharedReplicationConfig,
-) {
-    let mut handler = RespHandler::new(stream);
-    println!("Handling new request...");
-
-    loop {
-        let value = handler.read_value().await.unwrap();
-
-        println!("Got request value value {:?}", value);
-
-        let response = if let Some(v) = value {
-            let (command, args) = extract_command(v).unwrap();
-            match command.to_uppercase().as_str() {
-                "PING" => Value::SimpleString("PONG".to_string()),
-                "ECHO" => args.first().unwrap().clone(),
-                "SET" => handle_set(&db, &args),
-                "GET" => handle_get(&db, args[0].clone()),
-                "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
-                "KEYS" => handle_keys(&db),
-                "INFO" => handle_info(&shared_repl_conf),
-                c => panic!("Cannot handle command {}", c),
-            }
-        } else {
-            break;
-        };
-
-        println!("Sending value {:?}", response);
-
-        handler.write_value(response).await.unwrap();
     }
 }
 

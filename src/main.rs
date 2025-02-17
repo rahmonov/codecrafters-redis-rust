@@ -7,7 +7,7 @@ use resp::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 mod args;
@@ -26,6 +26,11 @@ async fn main() {
 
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
+
+    let port = match args.port {
+        Some(port) => port,
+        _ => 6379,
+    };
 
     if let (Some(dir), Some(dbfilename)) = (args.dir, args.dbfilename) {
         config
@@ -60,15 +65,70 @@ async fn main() {
 
             if let Ok(mut stream) = TcpStream::connect(&master_addr).await {
                 println!("Connected to the master server: {}", master_addr);
-                println!("Sending PING");
 
-                let ping = Value::Array(vec![Value::BulkString("PING".to_string())]).serialize();
-                stream
-                    .write_all(ping.as_bytes())
+                let (reader, mut writer) = stream.split();
+                let mut reader = BufReader::new(reader);
+                let mut response = String::new();
+                // TODO: check results of TCP requests (PONG, OK, OK)
+
+                // Step 1: Send PING
+                let ping_cmd = Value::Array(vec![Value::BulkString("PING".to_string())]);
+                writer
+                    .write_all(ping_cmd.serialize().as_bytes())
                     .await
                     .expect("PING didn't succeed");
+                writer.flush().await.unwrap();
 
-                println!("PING to master succeeded");
+                reader
+                    .read_line(&mut response)
+                    .await
+                    .expect("Failed to read PONG");
+                println!("Handshake Step 1 [PING] succeeded: {:?}", response);
+                response.clear();
+
+                // Step 2.1: Send REPLCONF listening-port <port>
+                let replconf_cmd = Value::Array(vec![
+                    Value::BulkString("REPLCONF".to_string()),
+                    Value::BulkString("listening-port".to_string()),
+                    Value::BulkString(port.to_string()),
+                ]);
+                writer
+                    .write_all(replconf_cmd.serialize().as_bytes())
+                    .await
+                    .expect("REPLCONF with listening port didn't succeed");
+                writer.flush().await.unwrap();
+
+                reader
+                    .read_line(&mut response)
+                    .await
+                    .expect("Failed to read PONG");
+                println!(
+                    "Handshake Step 2.1 [REPLCONF with listening port] succeeded: {:?}",
+                    response
+                );
+                response.clear();
+
+                // Step 2.2: Send REPLCONF capa psync2
+                let replconf_cmd = Value::Array(vec![
+                    Value::BulkString("REPLCONF".to_string()),
+                    Value::BulkString("capa".to_string()),
+                    Value::BulkString("psync2".to_string()),
+                ]);
+                writer
+                    .write_all(replconf_cmd.serialize().as_bytes())
+                    .await
+                    .expect("REPLCONF with capabilities didn't succeed");
+
+                reader
+                    .read_line(&mut response)
+                    .await
+                    .expect("Failed to read PONG");
+
+                println!(
+                    "Handshake Step 2.2 [REPLCONF with capabilities] succeeded: {:?}",
+                    response
+                );
+                response.clear();
             } else {
                 panic!("couldn't connect to the master server: {}", master_addr);
             }
@@ -83,11 +143,6 @@ async fn main() {
     }
 
     let shared_repl_conf: SharedReplicationConfig = Arc::new(Mutex::new(repl_config));
-
-    let port = match args.port {
-        Some(port) => port,
-        _ => 6379,
-    };
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
