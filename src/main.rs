@@ -54,101 +54,7 @@ async fn main() {
 
     match args.replicaof {
         Some(replicaof) => {
-            let master_addr = match replicaof.split_whitespace().collect::<Vec<_>>() {
-                ref parts if parts.len() == 2 => {
-                    format!("{}:{}", parts[0], parts[1])
-                }
-                _ => panic!("invalid master address"),
-            };
-
-            if let Ok(mut stream) = TcpStream::connect(&master_addr).await {
-                println!("Connected to the master server: {}", master_addr);
-
-                let (reader, mut writer) = stream.split();
-                let mut reader = BufReader::new(reader);
-                let mut response = String::new();
-                // TODO: check results of TCP requests (PONG, OK, OK)
-
-                // Step 1: Send PING
-                let ping_cmd = Value::Array(vec![Value::BulkString("PING".to_string())]);
-                writer
-                    .write_all(ping_cmd.serialize().as_bytes())
-                    .await
-                    .expect("PING didn't succeed");
-                writer.flush().await.unwrap();
-
-                reader
-                    .read_line(&mut response)
-                    .await
-                    .expect("Failed to read PONG");
-                println!("Handshake Step 1 [PING] succeeded: {:?}", response);
-                response.clear();
-
-                // Step 2.1: Send REPLCONF listening-port <port>
-                let replconf_cmd = Value::Array(vec![
-                    Value::BulkString("REPLCONF".to_string()),
-                    Value::BulkString("listening-port".to_string()),
-                    Value::BulkString(port.to_string()),
-                ]);
-                writer
-                    .write_all(replconf_cmd.serialize().as_bytes())
-                    .await
-                    .expect("REPLCONF with listening port didn't succeed");
-                writer.flush().await.unwrap();
-
-                reader
-                    .read_line(&mut response)
-                    .await
-                    .expect("Failed to read PONG");
-                println!(
-                    "Handshake Step 2.1 [REPLCONF with listening port] succeeded: {:?}",
-                    response
-                );
-                response.clear();
-
-                // Step 2.2: Send REPLCONF capa psync2
-                let replconf_cmd = Value::Array(vec![
-                    Value::BulkString("REPLCONF".to_string()),
-                    Value::BulkString("capa".to_string()),
-                    Value::BulkString("psync2".to_string()),
-                ]);
-                writer
-                    .write_all(replconf_cmd.serialize().as_bytes())
-                    .await
-                    .expect("REPLCONF with capabilities didn't succeed");
-
-                reader
-                    .read_line(&mut response)
-                    .await
-                    .expect("Failed to read PONG");
-
-                println!(
-                    "Handshake Step 2.2 [REPLCONF with capabilities] succeeded: {:?}",
-                    response
-                );
-                response.clear();
-
-                // Step 3: Send PSYNC
-                let psync_cmd = Value::Array(vec![
-                    Value::BulkString("PSYNC".to_string()),
-                    Value::BulkString("?".to_string()),
-                    Value::BulkString("-1".to_string()),
-                ]);
-                writer
-                    .write_all(psync_cmd.serialize().as_bytes())
-                    .await
-                    .expect("PSYNC didn't succeed");
-                reader
-                    .read_line(&mut response)
-                    .await
-                    .expect("Failed to read PSYNC response");
-
-                println!("Handshake Step 3 [PSYNC] succeeded: {:?}", response);
-                response.clear();
-            } else {
-                panic!("couldn't connect to the master server: {}", master_addr);
-            }
-
+            handshake_master(replicaof, port).await;
             repl_config.role = ReplRole::Slave;
         }
         None => {
@@ -175,5 +81,102 @@ async fn main() {
         tokio::spawn(async move {
             handle_connection(stream, db, config, shared_repl_conf).await;
         });
+    }
+}
+
+async fn handshake_master(master_addr: String, port: usize) {
+    let master_addr = match master_addr.split_whitespace().collect::<Vec<_>>() {
+        ref parts if parts.len() == 2 => {
+            format!("{}:{}", parts[0], parts[1])
+        }
+        _ => panic!("invalid master address"),
+    };
+
+    if let Ok(mut stream) = TcpStream::connect(&master_addr).await {
+        println!("Connected to the master server: {}", master_addr);
+
+        let (reader, mut writer) = stream.split();
+        let mut reader = BufReader::new(reader);
+        let mut response = String::new();
+        // TODO: check results of TCP requests (PONG, OK, OK)
+
+        // Step 1: Send PING
+        let ping_cmd = Value::Array(vec![Value::BulkString("PING".to_string())]);
+        writer
+            .write_all(ping_cmd.serialize().as_bytes())
+            .await
+            .expect("PING didn't succeed");
+        writer.flush().await.unwrap();
+
+        reader
+            .read_line(&mut response)
+            .await
+            .expect("Failed to read PONG");
+        println!("Handshake Step 1 [PING] succeeded: {:?}", response);
+        response.clear();
+
+        // Step 2.1: Send REPLCONF listening-port <port>
+        let replconf_cmd = Value::Array(vec![
+            Value::BulkString("REPLCONF".to_string()),
+            Value::BulkString("listening-port".to_string()),
+            Value::BulkString(port.to_string()),
+        ]);
+        writer
+            .write_all(replconf_cmd.serialize().as_bytes())
+            .await
+            .expect("REPLCONF with listening port didn't succeed");
+        writer.flush().await.unwrap();
+
+        reader
+            .read_line(&mut response)
+            .await
+            .expect("Failed to read PONG");
+        println!(
+            "Handshake Step 2.1 [REPLCONF with listening port] succeeded: {:?}",
+            response
+        );
+        response.clear();
+
+        // Step 2.2: Send REPLCONF capa psync2
+        let replconf_cmd = Value::Array(vec![
+            Value::BulkString("REPLCONF".to_string()),
+            Value::BulkString("capa".to_string()),
+            Value::BulkString("psync2".to_string()),
+        ]);
+        writer
+            .write_all(replconf_cmd.serialize().as_bytes())
+            .await
+            .expect("REPLCONF with capabilities didn't succeed");
+
+        reader
+            .read_line(&mut response)
+            .await
+            .expect("Failed to read PONG");
+
+        println!(
+            "Handshake Step 2.2 [REPLCONF with capabilities] succeeded: {:?}",
+            response
+        );
+        response.clear();
+
+        // Step 3: Send PSYNC
+        let psync_cmd = Value::Array(vec![
+            Value::BulkString("PSYNC".to_string()),
+            Value::BulkString("?".to_string()),
+            Value::BulkString("-1".to_string()),
+        ]);
+        writer
+            .write_all(psync_cmd.serialize().as_bytes())
+            .await
+            .expect("PSYNC didn't succeed");
+        reader
+            .read_line(&mut response)
+            .await
+            .expect("Failed to read PSYNC response");
+
+        println!("Handshake Step 3 [PSYNC] succeeded: {:?}", response);
+        response.clear();
+    } else {
+        panic!("couldn't connect to the master server: {}", master_addr);
     }
 }
