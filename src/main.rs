@@ -129,6 +129,24 @@ async fn main() {
                     response
                 );
                 response.clear();
+
+                // Step 3: Send PSYNC
+                let psync_cmd = Value::Array(vec![
+                    Value::BulkString("PSYNC".to_string()),
+                    Value::BulkString("?".to_string()),
+                    Value::BulkString("-1".to_string()),
+                ]);
+                writer
+                    .write_all(psync_cmd.serialize().as_bytes())
+                    .await
+                    .expect("PSYNC didn't succeed");
+                reader
+                    .read_line(&mut response)
+                    .await
+                    .expect("Failed to read PSYNC response");
+
+                println!("Handshake Step 3 [PSYNC] succeeded: {:?}", response);
+                response.clear();
             } else {
                 panic!("couldn't connect to the master server: {}", master_addr);
             }

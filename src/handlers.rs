@@ -31,6 +31,7 @@ pub async fn handle_connection(
                 "KEYS" => handle_keys(&db),
                 "INFO" => handle_info(&shared_repl_conf),
                 "REPLCONF" => handle_replconf(),
+                "PSYNC" => handle_psync(),
                 c => panic!("Cannot handle command {}", c),
             }
         } else {
@@ -42,6 +43,10 @@ pub async fn handle_connection(
 
         handler.write_value(response).await.unwrap();
     }
+}
+
+fn handle_psync() -> Value {
+    Value::SimpleString("FULLRESYNC".to_string())
 }
 
 fn handle_replconf() -> Value {
