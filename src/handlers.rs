@@ -31,7 +31,7 @@ pub async fn handle_connection(
                 "KEYS" => handle_keys(&db),
                 "INFO" => handle_info(&shared_repl_conf),
                 "REPLCONF" => handle_replconf(),
-                "PSYNC" => handle_psync(),
+                "PSYNC" => handle_psync(&shared_repl_conf),
                 c => panic!("Cannot handle command {}", c),
             }
         } else {
@@ -45,8 +45,10 @@ pub async fn handle_connection(
     }
 }
 
-fn handle_psync() -> Value {
-    Value::SimpleString("FULLRESYNC".to_string())
+fn handle_psync(shared_repl_conf: &SharedReplicationConfig) -> Value {
+    let repl_conf = shared_repl_conf.lock().unwrap();
+    let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
+    Value::SimpleString(resp)
 }
 
 fn handle_replconf() -> Value {
