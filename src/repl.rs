@@ -1,5 +1,6 @@
 use core::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub enum ReplRole {
     Master,

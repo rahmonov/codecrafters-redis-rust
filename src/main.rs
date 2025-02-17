@@ -6,9 +6,10 @@ use repl::{ReplConfig, ReplRole, SharedReplicationConfig};
 use resp::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 
 mod args;
 mod db;
@@ -33,20 +34,17 @@ async fn main() {
     };
 
     if let (Some(dir), Some(dbfilename)) = (args.dir, args.dbfilename) {
+        config.lock().await.insert("dir".to_string(), dir.clone());
         config
             .lock()
-            .unwrap()
-            .insert("dir".to_string(), dir.clone());
-        config
-            .lock()
-            .unwrap()
+            .await
             .insert("dbfilename".to_string(), dbfilename.clone());
 
         let filename = format!("{dir}/{dbfilename}");
         let path = Path::new(&filename);
 
         let rdb_contents = rdb::parse_rdb_file(path.to_path_buf()).await.unwrap();
-        let mut db = db.lock().unwrap();
+        let mut db = db.lock().await;
         *db = rdb_contents;
 
         println!("Loaded the RDB file successfully");
@@ -174,7 +172,7 @@ async fn main() {
         let config = config.clone();
         let shared_repl_conf = shared_repl_conf.clone();
 
-        tokio::spawn(async {
+        tokio::spawn(async move {
             handle_connection(stream, db, config, shared_repl_conf).await;
         });
     }

@@ -27,56 +27,66 @@ pub async fn handle_connection(
             break;
         };
 
-        let response = match command.to_uppercase().as_str() {
-            "PING" => Value::SimpleString("PONG".to_string()),
-            "ECHO" => args.first().unwrap().clone(),
-            "SET" => handle_set(&db, &args),
-            "GET" => handle_get(&db, args[0].clone()),
-            "CONFIG" => handle_config(&config, args[0].clone(), args[1].clone()),
-            "KEYS" => handle_keys(&db),
-            "INFO" => handle_info(&shared_repl_conf),
-            "REPLCONF" => handle_replconf(),
-            "PSYNC" => handle_psync(&shared_repl_conf),
+        match command.to_uppercase().as_str() {
+            "PING" => handle_ping(&mut handler).await,
+            "ECHO" => handle_echo(&mut handler, args.first().unwrap().clone()).await,
+            "SET" => handle_set(&mut handler, &db, &args).await,
+            "GET" => handle_get(&mut handler, &db, args[0].clone()).await,
+            "CONFIG" => {
+                handle_config(&mut handler, &config, args[0].clone(), args[1].clone()).await
+            }
+            "KEYS" => handle_keys(&mut handler, &db).await,
+            "INFO" => handle_info(&mut handler, &shared_repl_conf).await,
+            "REPLCONF" => handle_replconf(&mut handler).await,
+            "PSYNC" => handle_psync(&mut handler, &shared_repl_conf).await,
             c => panic!("Cannot handle command {}", c),
         };
 
-        println!("Sending value {:?}", response);
-
-        handler.write_value(response).await.unwrap();
-
-        // psync post-processing
-        // todo: refactor all handlers to write themselves
-        if command.to_uppercase().as_str() == "PSYNC" {
-            let empty_rdb: Vec<u8> = vec![
-                0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x31, 0x31, 0xfa, 0x09, 0x72, 0x65, 0x64,
-                0x69, 0x73, 0x2d, 0x76, 0x65, 0x72, 0x05, 0x37, 0x2e, 0x32, 0x2e, 0x30, 0xfa, 0x0a,
-                0x72, 0x65, 0x64, 0x69, 0x73, 0x2d, 0x62, 0x69, 0x74, 0x73, 0xc0, 0x40, 0xfa, 0x05,
-                0x63, 0x74, 0x69, 0x6d, 0x65, 0xc2, 0x6d, 0x08, 0xbc, 0x65, 0xfa, 0x08, 0x75, 0x73,
-                0x65, 0x64, 0x2d, 0x6d, 0x65, 0x6d, 0xc2, 0xb0, 0xc4, 0x10, 0x00, 0xfa, 0x08, 0x61,
-                0x6f, 0x66, 0x2d, 0x62, 0x61, 0x73, 0x65, 0xc0, 0x00, 0xff, 0xf0, 0x6e, 0x3b, 0xfe,
-                0xc0, 0xff, 0x5a, 0xa2,
-            ];
-            handler
-                .write(format!("${}\r\n", empty_rdb.len(),).as_bytes())
-                .await
-                .unwrap();
-            handler.write(&empty_rdb).await.unwrap();
-        }
+        println!("response has been sent");
     }
 }
 
-fn handle_psync(shared_repl_conf: &SharedReplicationConfig) -> Value {
-    let repl_conf = shared_repl_conf.lock().unwrap();
+async fn handle_echo(resp_handler: &mut RespHandler, what: Value) {
+    resp_handler.write_value(what).await.unwrap();
+}
+
+async fn handle_ping(resp_handler: &mut RespHandler) {
+    resp_handler
+        .write_value(Value::SimpleString("PONG".to_string()))
+        .await
+        .unwrap();
+}
+
+async fn handle_psync(resp_handler: &mut RespHandler, shared_repl_conf: &SharedReplicationConfig) {
+    let repl_conf = shared_repl_conf.lock().await;
     let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
-    Value::SimpleString(resp)
+    let resp_val = Value::SimpleString(resp);
+
+    resp_handler.write_value(resp_val).await.unwrap();
+
+    let empty_rdb: Vec<u8> = vec![
+        0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x31, 0x31, 0xfa, 0x09, 0x72, 0x65, 0x64, 0x69,
+        0x73, 0x2d, 0x76, 0x65, 0x72, 0x05, 0x37, 0x2e, 0x32, 0x2e, 0x30, 0xfa, 0x0a, 0x72, 0x65,
+        0x64, 0x69, 0x73, 0x2d, 0x62, 0x69, 0x74, 0x73, 0xc0, 0x40, 0xfa, 0x05, 0x63, 0x74, 0x69,
+        0x6d, 0x65, 0xc2, 0x6d, 0x08, 0xbc, 0x65, 0xfa, 0x08, 0x75, 0x73, 0x65, 0x64, 0x2d, 0x6d,
+        0x65, 0x6d, 0xc2, 0xb0, 0xc4, 0x10, 0x00, 0xfa, 0x08, 0x61, 0x6f, 0x66, 0x2d, 0x62, 0x61,
+        0x73, 0x65, 0xc0, 0x00, 0xff, 0xf0, 0x6e, 0x3b, 0xfe, 0xc0, 0xff, 0x5a, 0xa2,
+    ];
+    resp_handler
+        .write(format!("${}\r\n", empty_rdb.len(),).as_bytes())
+        .await
+        .unwrap();
+    resp_handler.write(&empty_rdb).await.unwrap();
 }
 
-fn handle_replconf() -> Value {
-    Value::SimpleString("OK".to_string())
+async fn handle_replconf(resp_handler: &mut RespHandler) {
+    let resp = Value::SimpleString("OK".to_string());
+
+    resp_handler.write_value(resp).await.unwrap();
 }
 
-pub fn handle_info(replication_config: &SharedReplicationConfig) -> Value {
-    let repl_conf = replication_config.lock().unwrap();
+async fn handle_info(resp_handler: &mut RespHandler, replication_config: &SharedReplicationConfig) {
+    let repl_conf = replication_config.lock().await;
     let mut result_values = vec![format!("role:{}", repl_conf.role)];
 
     match repl_conf.role {
@@ -93,25 +103,34 @@ pub fn handle_info(replication_config: &SharedReplicationConfig) -> Value {
         ReplRole::Slave => {}
     }
 
-    Value::BulkString(result_values.join("\r\n"))
+    let resp = Value::BulkString(result_values.join("\r\n"));
+
+    resp_handler.write_value(resp).await.unwrap();
 }
 
-pub fn handle_keys(db: &Db) -> Value {
-    let db = db.lock().unwrap();
+async fn handle_keys(resp_handler: &mut RespHandler, db: &Db) {
+    let db = db.lock().await;
 
-    Value::Array(
+    let resp_val = Value::Array(
         db.keys()
             .map(|key| Value::SimpleString(key.to_string()))
             .collect(),
-    )
+    );
+
+    resp_handler.write_value(resp_val).await.unwrap();
 }
 
-pub fn handle_config(config: &Config, config_command: Value, config_key: Value) -> Value {
+async fn handle_config(
+    resp_handler: &mut RespHandler,
+    config: &Config,
+    config_command: Value,
+    config_key: Value,
+) {
     let config_command = unpack_bulk_str(config_command).unwrap();
 
-    match config_command.as_str() {
+    let resp_val = match config_command.as_str() {
         "GET" => {
-            let config = config.lock().unwrap();
+            let config = config.lock().await;
             let config_key_name = unpack_bulk_str(config_key.clone()).unwrap();
 
             Value::Array(vec![
@@ -120,11 +139,13 @@ pub fn handle_config(config: &Config, config_command: Value, config_key: Value) 
             ])
         }
         _ => Value::NullBulkString,
-    }
+    };
+
+    resp_handler.write_value(resp_val).await.unwrap();
 }
 
-pub fn handle_set(db: &Db, args: &[Value]) -> Value {
-    let mut db = db.lock().unwrap();
+async fn handle_set(resp_handler: &mut RespHandler, db: &Db, args: &[Value]) {
+    let mut db = db.lock().await;
 
     let key = unpack_bulk_str(args[0].clone()).unwrap();
     let value = unpack_bulk_str(args[1].clone()).unwrap();
@@ -149,14 +170,17 @@ pub fn handle_set(db: &Db, args: &[Value]) -> Value {
 
     db.insert(key, item);
 
-    Value::SimpleString("OK".to_string())
+    resp_handler
+        .write_value(Value::SimpleString("OK".to_string()))
+        .await
+        .unwrap();
 }
 
-pub fn handle_get(db: &Db, key: Value) -> Value {
-    let db = db.lock().unwrap();
+async fn handle_get(resp_handler: &mut RespHandler, db: &Db, key: Value) {
+    let db = db.lock().await;
     let key = unpack_bulk_str(key).unwrap();
 
-    match db.get(&key) {
+    let resp_val = match db.get(&key) {
         Some(db_item) => {
             let result = Value::BulkString(db_item.value.to_string());
 
@@ -169,7 +193,9 @@ pub fn handle_get(db: &Db, key: Value) -> Value {
             }
         }
         None => Value::NullBulkString,
-    }
+    };
+
+    resp_handler.write_value(resp_val).await.unwrap();
 }
 
 fn extract_command(value: Value) -> Result<(String, Vec<Value>)> {
