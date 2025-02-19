@@ -131,7 +131,7 @@ async fn handle_config(
 ) {
     let config_command = unpack_bulk_str(config_command).unwrap();
 
-    let resp_val = match config_command.as_str() {
+    let resp_val = match config_command.to_uppercase().as_str() {
         "GET" => {
             let config = config.lock().await;
             let config_key_name = unpack_bulk_str(config_key.clone()).unwrap();
