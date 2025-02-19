@@ -22,7 +22,7 @@ pub async fn handle_connection(
     let mut conn = Connection::new(stream);
 
     loop {
-        let value = conn.read_value().await.unwrap();
+        let value = conn.read_frame().await.unwrap();
         let sender = Arc::clone(&sender);
 
         println!("Got request value {:?}", value);
@@ -51,23 +51,22 @@ pub async fn handle_connection(
     }
 }
 
-async fn handle_echo(resp_handler: &mut Connection, what: Frame) {
-    resp_handler.write_value(what).await.unwrap();
+async fn handle_echo(conn: &mut Connection, what: Frame) {
+    conn.write_frame(what).await.unwrap();
 }
 
-async fn handle_ping(resp_handler: &mut Connection) {
-    resp_handler
-        .write_value(Frame::SimpleString("PONG".to_string()))
+async fn handle_ping(conn: &mut Connection) {
+    conn.write_frame(Frame::SimpleString("PONG".to_string()))
         .await
         .unwrap();
 }
 
-async fn handle_psync(resp_handler: &mut Connection, shared_repl_conf: &SharedReplicationConfig) {
+async fn handle_psync(conn: &mut Connection, shared_repl_conf: &SharedReplicationConfig) {
     let repl_conf = shared_repl_conf.lock().await;
     let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
     let resp_val = Frame::SimpleString(resp);
 
-    resp_handler.write_value(resp_val).await.unwrap();
+    conn.write_frame(resp_val).await.unwrap();
 
     let empty_rdb: Vec<u8> = vec![
         0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x31, 0x31, 0xfa, 0x09, 0x72, 0x65, 0x64, 0x69,
@@ -77,20 +76,19 @@ async fn handle_psync(resp_handler: &mut Connection, shared_repl_conf: &SharedRe
         0x65, 0x6d, 0xc2, 0xb0, 0xc4, 0x10, 0x00, 0xfa, 0x08, 0x61, 0x6f, 0x66, 0x2d, 0x62, 0x61,
         0x73, 0x65, 0xc0, 0x00, 0xff, 0xf0, 0x6e, 0x3b, 0xfe, 0xc0, 0xff, 0x5a, 0xa2,
     ];
-    resp_handler
-        .write(format!("${}\r\n", empty_rdb.len(),).as_bytes())
+    conn.write(format!("${}\r\n", empty_rdb.len(),).as_bytes())
         .await
         .unwrap();
-    resp_handler.write(&empty_rdb).await.unwrap();
+    conn.write(&empty_rdb).await.unwrap();
 }
 
-async fn handle_replconf(resp_handler: &mut Connection) {
+async fn handle_replconf(conn: &mut Connection) {
     let resp = Frame::SimpleString("OK".to_string());
 
-    resp_handler.write_value(resp).await.unwrap();
+    conn.write_frame(resp).await.unwrap();
 }
 
-async fn handle_info(resp_handler: &mut Connection, replication_config: &SharedReplicationConfig) {
+async fn handle_info(conn: &mut Connection, replication_config: &SharedReplicationConfig) {
     let repl_conf = replication_config.lock().await;
     let mut result_values = vec![format!("role:{}", repl_conf.role)];
 
@@ -110,10 +108,10 @@ async fn handle_info(resp_handler: &mut Connection, replication_config: &SharedR
 
     let resp = Frame::BulkString(result_values.join("\r\n"));
 
-    resp_handler.write_value(resp).await.unwrap();
+    conn.write_frame(resp).await.unwrap();
 }
 
-async fn handle_keys(resp_handler: &mut Connection, db: &Db) {
+async fn handle_keys(conn: &mut Connection, db: &Db) {
     let db = db.lock().await;
 
     let resp_val = Frame::Array(
@@ -122,11 +120,11 @@ async fn handle_keys(resp_handler: &mut Connection, db: &Db) {
             .collect(),
     );
 
-    resp_handler.write_value(resp_val).await.unwrap();
+    conn.write_frame(resp_val).await.unwrap();
 }
 
 async fn handle_config(
-    resp_handler: &mut Connection,
+    conn: &mut Connection,
     config: &Config,
     config_command: Frame,
     config_key: Frame,
@@ -146,15 +144,10 @@ async fn handle_config(
         _ => Frame::NullBulkString,
     };
 
-    resp_handler.write_value(resp_val).await.unwrap();
+    conn.write_frame(resp_val).await.unwrap();
 }
 
-async fn handle_set(
-    resp_handler: &mut Connection,
-    db: &Db,
-    args: &[Frame],
-    sender: Arc<Sender<Frame>>,
-) {
+async fn handle_set(conn: &mut Connection, db: &Db, args: &[Frame], sender: Arc<Sender<Frame>>) {
     let mut db = db.lock().await;
 
     let key = unpack_bulk_str(args[0].clone()).unwrap();
@@ -180,17 +173,16 @@ async fn handle_set(
 
     db.insert(key, item);
 
-    resp_handler
-        .write_value(Frame::SimpleString("OK".to_string()))
+    conn.write_frame(Frame::SimpleString("OK".to_string()))
         .await
         .unwrap();
 }
 
-async fn handle_get(resp_handler: &mut Connection, db: &Db, key: Frame) {
+async fn handle_get(conn: &mut Connection, db: &Db, key: Frame) {
     let db = db.lock().await;
     let key = unpack_bulk_str(key).unwrap();
 
-    let resp_val = match db.get(&key) {
+    let frame = match db.get(&key) {
         Some(db_item) => {
             let result = Frame::BulkString(db_item.value.to_string());
 
@@ -205,11 +197,11 @@ async fn handle_get(resp_handler: &mut Connection, db: &Db, key: Frame) {
         None => Frame::NullBulkString,
     };
 
-    resp_handler.write_value(resp_val).await.unwrap();
+    conn.write_frame(frame).await.unwrap();
 }
 
-fn extract_command(value: Frame) -> Result<(String, Vec<Frame>)> {
-    match value {
+fn extract_command(frame: Frame) -> Result<(String, Vec<Frame>)> {
+    match frame {
         Frame::Array(a) => Ok((
             unpack_bulk_str(a.first().unwrap().clone())?,
             a.into_iter().skip(1).collect(),
@@ -218,8 +210,8 @@ fn extract_command(value: Frame) -> Result<(String, Vec<Frame>)> {
     }
 }
 
-fn unpack_bulk_str(value: Frame) -> Result<String> {
-    match value {
+fn unpack_bulk_str(frame: Frame) -> Result<String> {
+    match frame {
         Frame::BulkString(s) => Ok(s),
         _ => Err(anyhow::anyhow!("Expected command to be a bulk string")),
     }

@@ -17,19 +17,19 @@ impl Connection {
         }
     }
 
-    pub async fn read_value(&mut self) -> Result<Option<Frame>> {
+    pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
 
         if bytes_read == 0 {
             return Ok(None);
         }
 
-        let (v, _) = Frame::parse_message(self.buffer.split())?;
-        Ok(Some(v))
+        let (f, _) = Frame::parse_message(self.buffer.split())?;
+        Ok(Some(f))
     }
 
-    pub async fn write_value(&mut self, value: Frame) -> Result<()> {
-        self.stream.write_all(value.serialize().as_bytes()).await?;
+    pub async fn write_frame(&mut self, frame: Frame) -> Result<()> {
+        self.stream.write_all(frame.serialize().as_bytes()).await?;
         self.stream.flush().await?;
 
         Ok(())
