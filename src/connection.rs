@@ -1,4 +1,4 @@
-use crate::frame::Value;
+use crate::frame::Frame;
 use anyhow::Result;
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,18 +17,18 @@ impl Connection {
         }
     }
 
-    pub async fn read_value(&mut self) -> Result<Option<Value>> {
+    pub async fn read_value(&mut self) -> Result<Option<Frame>> {
         let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
 
         if bytes_read == 0 {
             return Ok(None);
         }
 
-        let (v, _) = Value::parse_message(self.buffer.split())?;
+        let (v, _) = Frame::parse_message(self.buffer.split())?;
         Ok(Some(v))
     }
 
-    pub async fn write_value(&mut self, value: Value) -> Result<()> {
+    pub async fn write_value(&mut self, value: Frame) -> Result<()> {
         self.stream.write_all(value.serialize().as_bytes()).await?;
         self.stream.flush().await?;
 

@@ -1,7 +1,7 @@
 use args::ServiceArguments;
 use clap::Parser;
 use db::{Db, DbItem};
-use frame::Value;
+use frame::Frame;
 use handlers::handle_connection;
 use repl::{ReplConfig, ReplRole, SharedReplicationConfig};
 use std::collections::HashMap;
@@ -107,7 +107,7 @@ async fn handshake_master(master_addr: String, port: usize) {
         // TODO: check results of TCP requests (PONG, OK, OK)
 
         // Step 1: Send PING
-        let ping_cmd = Value::Array(vec![Value::BulkString("PING".to_string())]);
+        let ping_cmd = Frame::Array(vec![Frame::BulkString("PING".to_string())]);
         writer
             .write_all(ping_cmd.serialize().as_bytes())
             .await
@@ -122,10 +122,10 @@ async fn handshake_master(master_addr: String, port: usize) {
         response.clear();
 
         // Step 2.1: Send REPLCONF listening-port <port>
-        let replconf_cmd = Value::Array(vec![
-            Value::BulkString("REPLCONF".to_string()),
-            Value::BulkString("listening-port".to_string()),
-            Value::BulkString(port.to_string()),
+        let replconf_cmd = Frame::Array(vec![
+            Frame::BulkString("REPLCONF".to_string()),
+            Frame::BulkString("listening-port".to_string()),
+            Frame::BulkString(port.to_string()),
         ]);
         writer
             .write_all(replconf_cmd.serialize().as_bytes())
@@ -144,10 +144,10 @@ async fn handshake_master(master_addr: String, port: usize) {
         response.clear();
 
         // Step 2.2: Send REPLCONF capa psync2
-        let replconf_cmd = Value::Array(vec![
-            Value::BulkString("REPLCONF".to_string()),
-            Value::BulkString("capa".to_string()),
-            Value::BulkString("psync2".to_string()),
+        let replconf_cmd = Frame::Array(vec![
+            Frame::BulkString("REPLCONF".to_string()),
+            Frame::BulkString("capa".to_string()),
+            Frame::BulkString("psync2".to_string()),
         ]);
         writer
             .write_all(replconf_cmd.serialize().as_bytes())
@@ -166,10 +166,10 @@ async fn handshake_master(master_addr: String, port: usize) {
         response.clear();
 
         // Step 3: Send PSYNC
-        let psync_cmd = Value::Array(vec![
-            Value::BulkString("PSYNC".to_string()),
-            Value::BulkString("?".to_string()),
-            Value::BulkString("-1".to_string()),
+        let psync_cmd = Frame::Array(vec![
+            Frame::BulkString("PSYNC".to_string()),
+            Frame::BulkString("?".to_string()),
+            Frame::BulkString("-1".to_string()),
         ]);
         writer
             .write_all(psync_cmd.serialize().as_bytes())
