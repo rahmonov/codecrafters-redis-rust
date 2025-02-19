@@ -3,7 +3,7 @@ use clap::Parser;
 use db::{Db, DbItem};
 use frame::Frame;
 use handlers::handle_connection;
-use repl::{ReplConfig, ReplRole, SharedReplicationConfig};
+use replication::{ReplConfig, ReplRole, SharedReplicationConfig};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ mod db;
 mod frame;
 mod handlers;
 mod rdb;
-mod repl;
+mod replication;
 
 // todo: make it a struct too
 type Config = Arc<Mutex<HashMap<String, String>>>;
@@ -26,8 +26,6 @@ type Config = Arc<Mutex<HashMap<String, String>>>;
 async fn main() {
     let args = ServiceArguments::parse();
 
-    // TODO: these shouldn't be arc/shared/cloned.
-    // They should be a singleton of some kind.
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
     let (sender, _rx) = broadcast::channel(16);

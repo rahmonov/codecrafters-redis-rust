@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::connection::Connection;
 use crate::db::{Db, DbItem};
 use crate::frame::Frame;
-use crate::repl::{ReplRole, SharedReplicationConfig};
+use crate::replication::{ReplRole, SharedReplicationConfig};
 use crate::Config;
 use anyhow::Result;
 use tokio::net::TcpStream;
