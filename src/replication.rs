@@ -1,6 +1,6 @@
 use core::fmt;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+
+use crate::config::Config;
 
 pub enum ReplRole {
     Master,
@@ -16,20 +16,25 @@ impl fmt::Display for ReplRole {
     }
 }
 
-pub struct ReplConfig {
+pub struct ReplicationConfig {
     pub role: ReplRole,
     pub master_replid: Option<String>,
     pub master_repl_offset: Option<usize>,
 }
 
-impl ReplConfig {
-    pub fn default() -> Self {
-        ReplConfig {
-            role: ReplRole::Master,
-            master_replid: None,
-            master_repl_offset: None,
+impl ReplicationConfig {
+    pub fn from_config(config: &Config) -> Self {
+        match config.replicaof.is_some() {
+            true => ReplicationConfig {
+                role: ReplRole::Slave,
+                master_replid: None,
+                master_repl_offset: None,
+            },
+            false => ReplicationConfig {
+                role: ReplRole::Master,
+                master_replid: Some("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string()),
+                master_repl_offset: Some(0),
+            },
         }
     }
 }
-
-pub type SharedReplicationConfig = Arc<Mutex<ReplConfig>>;

@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 #[derive(Debug)]
@@ -28,4 +26,4 @@ impl DbItem {
     }
 }
 
-pub type Db = Arc<Mutex<HashMap<String, DbItem>>>;
+pub type Db = HashMap<String, DbItem>;

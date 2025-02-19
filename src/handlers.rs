@@ -3,66 +3,24 @@ use std::sync::Arc;
 use crate::connection::Connection;
 use crate::db::{Db, DbItem};
 use crate::frame::Frame;
-use crate::replication::{ReplRole, SharedReplicationConfig};
+use crate::replication::{ReplRole, ReplicationConfig};
 use crate::Config;
 use anyhow::Result;
-use tokio::net::TcpStream;
 use tokio::sync::broadcast::Sender;
+use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-pub async fn handle_connection(
-    stream: TcpStream,
-    db: Db,
-    config: Config,
-    shared_repl_conf: SharedReplicationConfig,
-    sender: Arc<Sender<Frame>>,
-) {
-    println!("Handling new request...");
-
-    let mut conn = Connection::new(stream);
-
-    loop {
-        let value = conn.read_frame().await.unwrap();
-        let sender = Arc::clone(&sender);
-
-        println!("Got request value {:?}", value);
-
-        let (command, args) = if let Some(v) = value {
-            extract_command(v).unwrap()
-        } else {
-            println!("got nothing, stopping reading");
-            break;
-        };
-
-        match command.to_uppercase().as_str() {
-            "PING" => handle_ping(&mut conn).await,
-            "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
-            "SET" => handle_set(&mut conn, &db, &args, sender).await,
-            "GET" => handle_get(&mut conn, &db, args[0].clone()).await,
-            "CONFIG" => handle_config(&mut conn, &config, args[0].clone(), args[1].clone()).await,
-            "KEYS" => handle_keys(&mut conn, &db).await,
-            "INFO" => handle_info(&mut conn, &shared_repl_conf).await,
-            "REPLCONF" => handle_replconf(&mut conn).await,
-            "PSYNC" => handle_psync(&mut conn, &shared_repl_conf).await,
-            c => panic!("Cannot handle command {}", c),
-        };
-
-        println!("response has been sent");
-    }
-}
-
-async fn handle_echo(conn: &mut Connection, what: Frame) {
+pub async fn handle_echo(conn: &mut Connection, what: Frame) {
     conn.write_frame(what).await.unwrap();
 }
 
-async fn handle_ping(conn: &mut Connection) {
+pub async fn handle_ping(conn: &mut Connection) {
     conn.write_frame(Frame::SimpleString("PONG".to_string()))
         .await
         .unwrap();
 }
 
-async fn handle_psync(conn: &mut Connection, shared_repl_conf: &SharedReplicationConfig) {
-    let repl_conf = shared_repl_conf.lock().await;
+pub async fn handle_psync(conn: &mut Connection, repl_conf: &ReplicationConfig) {
     let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
     let resp_val = Frame::SimpleString(resp);
 
@@ -82,14 +40,14 @@ async fn handle_psync(conn: &mut Connection, shared_repl_conf: &SharedReplicatio
     conn.write(&empty_rdb).await.unwrap();
 }
 
-async fn handle_replconf(conn: &mut Connection) {
+pub async fn handle_replconf(conn: &mut Connection) {
     let resp = Frame::SimpleString("OK".to_string());
 
     conn.write_frame(resp).await.unwrap();
 }
 
-async fn handle_info(conn: &mut Connection, replication_config: &SharedReplicationConfig) {
-    let repl_conf = replication_config.lock().await;
+pub async fn handle_info(conn: &mut Connection, replication_config: &ReplicationConfig) {
+    let repl_conf = replication_config;
     let mut result_values = vec![format!("role:{}", repl_conf.role)];
 
     match repl_conf.role {
@@ -111,7 +69,7 @@ async fn handle_info(conn: &mut Connection, replication_config: &SharedReplicati
     conn.write_frame(resp).await.unwrap();
 }
 
-async fn handle_keys(conn: &mut Connection, db: &Db) {
+pub async fn handle_keys(conn: &mut Connection, db: Arc<Mutex<Db>>) {
     let db = db.lock().await;
 
     let resp_val = Frame::Array(
@@ -123,7 +81,7 @@ async fn handle_keys(conn: &mut Connection, db: &Db) {
     conn.write_frame(resp_val).await.unwrap();
 }
 
-async fn handle_config(
+pub async fn handle_config(
     conn: &mut Connection,
     config: &Config,
     config_command: Frame,
@@ -133,13 +91,12 @@ async fn handle_config(
 
     let resp_val = match config_command.to_uppercase().as_str() {
         "GET" => {
-            let config = config.lock().await;
             let config_key_name = unpack_bulk_str(config_key.clone()).unwrap();
 
-            Frame::Array(vec![
-                config_key,
-                Frame::BulkString(config.get(&config_key_name).unwrap().to_string()),
-            ])
+            match config.get(config_key_name) {
+                Some(v) => Frame::Array(vec![config_key, Frame::BulkString(v)]),
+                None => Frame::NullBulkString,
+            }
         }
         _ => Frame::NullBulkString,
     };
@@ -147,7 +104,12 @@ async fn handle_config(
     conn.write_frame(resp_val).await.unwrap();
 }
 
-async fn handle_set(conn: &mut Connection, db: &Db, args: &[Frame], sender: Arc<Sender<Frame>>) {
+pub async fn handle_set(
+    conn: &mut Connection,
+    db: Arc<Mutex<Db>>,
+    args: &[Frame],
+    sender: Arc<Sender<Frame>>,
+) {
     let mut db = db.lock().await;
 
     let key = unpack_bulk_str(args[0].clone()).unwrap();
@@ -178,7 +140,7 @@ async fn handle_set(conn: &mut Connection, db: &Db, args: &[Frame], sender: Arc<
         .unwrap();
 }
 
-async fn handle_get(conn: &mut Connection, db: &Db, key: Frame) {
+pub async fn handle_get(conn: &mut Connection, db: Arc<Mutex<Db>>, key: Frame) {
     let db = db.lock().await;
     let key = unpack_bulk_str(key).unwrap();
 
@@ -200,7 +162,7 @@ async fn handle_get(conn: &mut Connection, db: &Db, key: Frame) {
     conn.write_frame(frame).await.unwrap();
 }
 
-fn extract_command(frame: Frame) -> Result<(String, Vec<Frame>)> {
+pub fn extract_command(frame: Frame) -> Result<(String, Vec<Frame>)> {
     match frame {
         Frame::Array(a) => Ok((
             unpack_bulk_str(a.first().unwrap().clone())?,
