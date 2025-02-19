@@ -1,9 +1,9 @@
 use args::ServiceArguments;
 use clap::Parser;
 use db::{Db, DbItem};
+use frame::Value;
 use handlers::handle_connection;
 use repl::{ReplConfig, ReplRole, SharedReplicationConfig};
-use resp::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -12,11 +12,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
 
 mod args;
+mod connection;
 mod db;
+mod frame;
 mod handlers;
 mod rdb;
 mod repl;
-mod resp;
 
 // todo: make it a struct too
 type Config = Arc<Mutex<HashMap<String, String>>>;

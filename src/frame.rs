@@ -1,7 +1,5 @@
 use anyhow::Result;
 use bytes::BytesMut;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -28,53 +26,14 @@ impl Value {
             ),
         }
     }
-}
 
-pub struct Connection {
-    pub stream: TcpStream,
-    buffer: BytesMut,
-}
-
-impl Connection {
-    pub fn new(stream: TcpStream) -> Self {
-        Connection {
-            stream,
-            buffer: BytesMut::with_capacity(512),
+    pub fn parse_message(buffer: BytesMut) -> Result<(Value, usize)> {
+        match buffer[0] as char {
+            '+' => parse_simple_string(buffer),
+            '*' => parse_array(buffer),
+            '$' => parse_bulk_string(buffer),
+            _ => Err(anyhow::anyhow!("Not a known value type {:?}", buffer)),
         }
-    }
-
-    pub async fn read_value(&mut self) -> Result<Option<Value>> {
-        let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
-
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-
-        let (v, _) = parse_message(self.buffer.split())?;
-        Ok(Some(v))
-    }
-
-    pub async fn write_value(&mut self, value: Value) -> Result<()> {
-        self.stream.write_all(value.serialize().as_bytes()).await?;
-        self.stream.flush().await?;
-
-        Ok(())
-    }
-
-    pub async fn write(&mut self, contents: &[u8]) -> Result<()> {
-        self.stream.write(contents).await?;
-        self.stream.flush().await?;
-
-        Ok(())
-    }
-}
-
-fn parse_message(buffer: BytesMut) -> Result<(Value, usize)> {
-    match buffer[0] as char {
-        '+' => parse_simple_string(buffer),
-        '*' => parse_array(buffer),
-        '$' => parse_bulk_string(buffer),
-        _ => Err(anyhow::anyhow!("Not a known value type {:?}", buffer)),
     }
 }
 
@@ -101,7 +60,7 @@ fn parse_array(buffer: BytesMut) -> Result<(Value, usize)> {
     let mut items = Vec::with_capacity(array_length as usize);
 
     for _ in 0..array_length {
-        let (array_item, len) = parse_message(BytesMut::from(&buffer[bytes_consumed..]))?;
+        let (array_item, len) = Value::parse_message(BytesMut::from(&buffer[bytes_consumed..]))?;
         items.push(array_item);
         bytes_consumed += len;
     }

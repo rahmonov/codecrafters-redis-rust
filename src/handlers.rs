@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use crate::connection::Connection;
 use crate::db::{Db, DbItem};
+use crate::frame::Value;
 use crate::repl::{ReplRole, SharedReplicationConfig};
-use crate::resp::{Connection, Value};
 use crate::Config;
 use anyhow::Result;
 use tokio::net::TcpStream;
