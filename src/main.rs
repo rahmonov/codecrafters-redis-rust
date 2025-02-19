@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 mod args;
 mod db;
@@ -25,8 +25,12 @@ type Config = Arc<Mutex<HashMap<String, String>>>;
 async fn main() {
     let args = ServiceArguments::parse();
 
+    // TODO: these shouldn't be arc/shared/cloned.
+    // They should be a singleton of some kind.
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
     let config: Config = Arc::new(Mutex::new(HashMap::new()));
+    let (sender, _rx) = broadcast::channel(16);
+    let sender = Arc::new(sender);
 
     let port = match args.port {
         Some(port) => port,
@@ -77,9 +81,10 @@ async fn main() {
         let db = db.clone();
         let config = config.clone();
         let shared_repl_conf = shared_repl_conf.clone();
+        let sender = Arc::clone(&sender);
 
         tokio::spawn(async move {
-            handle_connection(stream, db, config, shared_repl_conf).await;
+            handle_connection(stream, db, config, shared_repl_conf, sender).await;
         });
     }
 }

@@ -30,14 +30,14 @@ impl Value {
     }
 }
 
-pub struct RespHandler {
-    stream: TcpStream,
+pub struct Connection {
+    pub stream: TcpStream,
     buffer: BytesMut,
 }
 
-impl RespHandler {
+impl Connection {
     pub fn new(stream: TcpStream) -> Self {
-        RespHandler {
+        Connection {
             stream,
             buffer: BytesMut::with_capacity(512),
         }

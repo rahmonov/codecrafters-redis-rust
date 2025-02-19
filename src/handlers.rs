@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use crate::db::{Db, DbItem};
 use crate::repl::{ReplRole, SharedReplicationConfig};
-use crate::resp::{RespHandler, Value};
+use crate::resp::{Connection, Value};
 use crate::Config;
 use anyhow::Result;
 use tokio::net::TcpStream;
+use tokio::sync::broadcast::Sender;
 use tokio::time::Instant;
 
 pub async fn handle_connection(
@@ -11,12 +14,15 @@ pub async fn handle_connection(
     db: Db,
     config: Config,
     shared_repl_conf: SharedReplicationConfig,
+    sender: Arc<Sender<Value>>,
 ) {
-    let mut handler = RespHandler::new(stream);
     println!("Handling new request...");
 
+    let mut conn = Connection::new(stream);
+
     loop {
-        let value = handler.read_value().await.unwrap();
+        let value = conn.read_value().await.unwrap();
+        let sender = Arc::clone(&sender);
 
         println!("Got request value {:?}", value);
 
@@ -28,17 +34,15 @@ pub async fn handle_connection(
         };
 
         match command.to_uppercase().as_str() {
-            "PING" => handle_ping(&mut handler).await,
-            "ECHO" => handle_echo(&mut handler, args.first().unwrap().clone()).await,
-            "SET" => handle_set(&mut handler, &db, &args).await,
-            "GET" => handle_get(&mut handler, &db, args[0].clone()).await,
-            "CONFIG" => {
-                handle_config(&mut handler, &config, args[0].clone(), args[1].clone()).await
-            }
-            "KEYS" => handle_keys(&mut handler, &db).await,
-            "INFO" => handle_info(&mut handler, &shared_repl_conf).await,
-            "REPLCONF" => handle_replconf(&mut handler).await,
-            "PSYNC" => handle_psync(&mut handler, &shared_repl_conf).await,
+            "PING" => handle_ping(&mut conn).await,
+            "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
+            "SET" => handle_set(&mut conn, &db, &args, sender).await,
+            "GET" => handle_get(&mut conn, &db, args[0].clone()).await,
+            "CONFIG" => handle_config(&mut conn, &config, args[0].clone(), args[1].clone()).await,
+            "KEYS" => handle_keys(&mut conn, &db).await,
+            "INFO" => handle_info(&mut conn, &shared_repl_conf).await,
+            "REPLCONF" => handle_replconf(&mut conn).await,
+            "PSYNC" => handle_psync(&mut conn, &shared_repl_conf).await,
             c => panic!("Cannot handle command {}", c),
         };
 
@@ -46,18 +50,18 @@ pub async fn handle_connection(
     }
 }
 
-async fn handle_echo(resp_handler: &mut RespHandler, what: Value) {
+async fn handle_echo(resp_handler: &mut Connection, what: Value) {
     resp_handler.write_value(what).await.unwrap();
 }
 
-async fn handle_ping(resp_handler: &mut RespHandler) {
+async fn handle_ping(resp_handler: &mut Connection) {
     resp_handler
         .write_value(Value::SimpleString("PONG".to_string()))
         .await
         .unwrap();
 }
 
-async fn handle_psync(resp_handler: &mut RespHandler, shared_repl_conf: &SharedReplicationConfig) {
+async fn handle_psync(resp_handler: &mut Connection, shared_repl_conf: &SharedReplicationConfig) {
     let repl_conf = shared_repl_conf.lock().await;
     let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
     let resp_val = Value::SimpleString(resp);
@@ -79,13 +83,13 @@ async fn handle_psync(resp_handler: &mut RespHandler, shared_repl_conf: &SharedR
     resp_handler.write(&empty_rdb).await.unwrap();
 }
 
-async fn handle_replconf(resp_handler: &mut RespHandler) {
+async fn handle_replconf(resp_handler: &mut Connection) {
     let resp = Value::SimpleString("OK".to_string());
 
     resp_handler.write_value(resp).await.unwrap();
 }
 
-async fn handle_info(resp_handler: &mut RespHandler, replication_config: &SharedReplicationConfig) {
+async fn handle_info(resp_handler: &mut Connection, replication_config: &SharedReplicationConfig) {
     let repl_conf = replication_config.lock().await;
     let mut result_values = vec![format!("role:{}", repl_conf.role)];
 
@@ -108,7 +112,7 @@ async fn handle_info(resp_handler: &mut RespHandler, replication_config: &Shared
     resp_handler.write_value(resp).await.unwrap();
 }
 
-async fn handle_keys(resp_handler: &mut RespHandler, db: &Db) {
+async fn handle_keys(resp_handler: &mut Connection, db: &Db) {
     let db = db.lock().await;
 
     let resp_val = Value::Array(
@@ -121,7 +125,7 @@ async fn handle_keys(resp_handler: &mut RespHandler, db: &Db) {
 }
 
 async fn handle_config(
-    resp_handler: &mut RespHandler,
+    resp_handler: &mut Connection,
     config: &Config,
     config_command: Value,
     config_key: Value,
@@ -144,7 +148,12 @@ async fn handle_config(
     resp_handler.write_value(resp_val).await.unwrap();
 }
 
-async fn handle_set(resp_handler: &mut RespHandler, db: &Db, args: &[Value]) {
+async fn handle_set(
+    resp_handler: &mut Connection,
+    db: &Db,
+    args: &[Value],
+    sender: Arc<Sender<Value>>,
+) {
     let mut db = db.lock().await;
 
     let key = unpack_bulk_str(args[0].clone()).unwrap();
@@ -176,7 +185,7 @@ async fn handle_set(resp_handler: &mut RespHandler, db: &Db, args: &[Value]) {
         .unwrap();
 }
 
-async fn handle_get(resp_handler: &mut RespHandler, db: &Db, key: Value) {
+async fn handle_get(resp_handler: &mut Connection, db: &Db, key: Value) {
     let db = db.lock().await;
     let key = unpack_bulk_str(key).unwrap();
 
