@@ -10,7 +10,7 @@ pub enum Frame {
 }
 
 impl Frame {
-    pub fn serialize(self) -> String {
+    pub fn serialize(&self) -> String {
         match self {
             Frame::SimpleString(s) => format!("+{}\r\n", s),
             Frame::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),

@@ -11,20 +11,24 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 pub async fn handle_echo(conn: &mut Connection, what: Frame) {
-    conn.write_frame(what).await.unwrap();
+    conn.write_frame(&what).await.unwrap();
 }
 
 pub async fn handle_ping(conn: &mut Connection) {
-    conn.write_frame(Frame::SimpleString("PONG".to_string()))
+    conn.write_frame(&Frame::SimpleString("PONG".to_string()))
         .await
         .unwrap();
 }
 
-pub async fn handle_psync(conn: &mut Connection, repl_conf: &ReplicationConfig) {
+pub async fn handle_psync(
+    conn: &mut Connection,
+    repl_conf: &ReplicationConfig,
+    sender: Arc<Sender<Frame>>,
+) {
     let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
-    let resp_val = Frame::SimpleString(resp);
+    let resp_frame = Frame::SimpleString(resp);
 
-    conn.write_frame(resp_val).await.unwrap();
+    conn.write_frame(&resp_frame).await.unwrap();
 
     let empty_rdb: Vec<u8> = vec![
         0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x31, 0x31, 0xfa, 0x09, 0x72, 0x65, 0x64, 0x69,
@@ -38,12 +42,17 @@ pub async fn handle_psync(conn: &mut Connection, repl_conf: &ReplicationConfig) 
         .await
         .unwrap();
     conn.write(&empty_rdb).await.unwrap();
+
+    let mut receiver = sender.subscribe();
+
+    while let Ok(f) = receiver.recv().await {
+        conn.write_frame(&f).await.unwrap();
+    }
 }
 
 pub async fn handle_replconf(conn: &mut Connection) {
-    let resp = Frame::SimpleString("OK".to_string());
-
-    conn.write_frame(resp).await.unwrap();
+    let resp_frame = Frame::SimpleString("OK".to_string());
+    conn.write_frame(&resp_frame).await.unwrap();
 }
 
 pub async fn handle_info(conn: &mut Connection, replication_config: &ReplicationConfig) {
@@ -64,21 +73,21 @@ pub async fn handle_info(conn: &mut Connection, replication_config: &Replication
         ReplRole::Slave => {}
     }
 
-    let resp = Frame::BulkString(result_values.join("\r\n"));
+    let resp_frame = Frame::BulkString(result_values.join("\r\n"));
 
-    conn.write_frame(resp).await.unwrap();
+    conn.write_frame(&resp_frame).await.unwrap();
 }
 
 pub async fn handle_keys(conn: &mut Connection, db: Arc<Mutex<Db>>) {
     let db = db.lock().await;
 
-    let resp_val = Frame::Array(
+    let resp_frame = Frame::Array(
         db.keys()
             .map(|key| Frame::SimpleString(key.to_string()))
             .collect(),
     );
 
-    conn.write_frame(resp_val).await.unwrap();
+    conn.write_frame(&resp_frame).await.unwrap();
 }
 
 pub async fn handle_config(
@@ -89,7 +98,7 @@ pub async fn handle_config(
 ) {
     let config_command = unpack_bulk_str(config_command).unwrap();
 
-    let resp_val = match config_command.to_uppercase().as_str() {
+    let resp_frame = match config_command.to_uppercase().as_str() {
         "GET" => {
             let config_key_name = unpack_bulk_str(config_key.clone()).unwrap();
 
@@ -101,16 +110,17 @@ pub async fn handle_config(
         _ => Frame::NullBulkString,
     };
 
-    conn.write_frame(resp_val).await.unwrap();
+    conn.write_frame(&resp_frame).await.unwrap();
 }
 
 pub async fn handle_set(
     conn: &mut Connection,
     db: Arc<Mutex<Db>>,
-    args: &[Frame],
+    frame: Frame,
     sender: Arc<Sender<Frame>>,
 ) {
     let mut db = db.lock().await;
+    let (_, args) = extract_command(frame.clone()).unwrap();
 
     let key = unpack_bulk_str(args[0].clone()).unwrap();
     let value = unpack_bulk_str(args[1].clone()).unwrap();
@@ -135,9 +145,11 @@ pub async fn handle_set(
 
     db.insert(key, item);
 
-    conn.write_frame(Frame::SimpleString("OK".to_string()))
+    conn.write_frame(&Frame::SimpleString("OK".to_string()))
         .await
         .unwrap();
+
+    sender.send(frame).unwrap();
 }
 
 pub async fn handle_get(conn: &mut Connection, db: Arc<Mutex<Db>>, key: Frame) {
@@ -159,7 +171,7 @@ pub async fn handle_get(conn: &mut Connection, db: Arc<Mutex<Db>>, key: Frame) {
         None => Frame::NullBulkString,
     };
 
-    conn.write_frame(frame).await.unwrap();
+    conn.write_frame(&frame).await.unwrap();
 }
 
 pub fn extract_command(frame: Frame) -> Result<(String, Vec<Frame>)> {

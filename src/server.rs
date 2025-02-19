@@ -80,12 +80,13 @@ impl RedisServer {
 
             let sender = Arc::clone(&sender);
 
-            let (command, args) = extract_command(frame).unwrap();
+            // todo: maybe do this inside each handler, it would avoid the clone here
+            let (command, args) = extract_command(frame.clone()).unwrap();
 
             match command.to_uppercase().as_str() {
                 "PING" => handle_ping(&mut conn).await,
                 "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
-                "SET" => handle_set(&mut conn, Arc::clone(&self.db), &args, sender).await,
+                "SET" => handle_set(&mut conn, Arc::clone(&self.db), frame, sender).await,
                 "GET" => handle_get(&mut conn, Arc::clone(&self.db), args[0].clone()).await,
                 "CONFIG" => {
                     handle_config(&mut conn, &self.config, args[0].clone(), args[1].clone()).await
@@ -93,7 +94,7 @@ impl RedisServer {
                 "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
                 "INFO" => handle_info(&mut conn, &self.replication).await,
                 "REPLCONF" => handle_replconf(&mut conn).await,
-                "PSYNC" => handle_psync(&mut conn, &self.replication).await,
+                "PSYNC" => handle_psync(&mut conn, &self.replication, sender).await,
                 c => panic!("Cannot handle command {}", c),
             };
 
@@ -107,7 +108,7 @@ impl RedisServer {
 
         // Step 1: Send PING
         let ping_cmd = Frame::Array(vec![Frame::BulkString("PING".to_string())]);
-        conn.write_frame(ping_cmd)
+        conn.write_frame(&ping_cmd)
             .await
             .expect("PING didn't succeed");
 
@@ -120,7 +121,7 @@ impl RedisServer {
             Frame::BulkString("listening-port".to_string()),
             Frame::BulkString(self.config.port.to_string()),
         ]);
-        conn.write_frame(replconf_cmd)
+        conn.write_frame(&replconf_cmd)
             .await
             .expect("REPLCONF with listening port didn't succeed");
 
@@ -133,7 +134,7 @@ impl RedisServer {
             Frame::BulkString("capa".to_string()),
             Frame::BulkString("psync2".to_string()),
         ]);
-        conn.write_frame(replconf_cmd)
+        conn.write_frame(&replconf_cmd)
             .await
             .expect("REPLCONF with capabilities didn't succeed");
 
@@ -146,7 +147,7 @@ impl RedisServer {
             Frame::BulkString("?".to_string()),
             Frame::BulkString("-1".to_string()),
         ]);
-        conn.write_frame(psync_cmd)
+        conn.write_frame(&psync_cmd)
             .await
             .expect("PSYNC didn't succeed");
 

@@ -28,7 +28,7 @@ impl Connection {
         Ok(Some(f))
     }
 
-    pub async fn write_frame(&mut self, frame: Frame) -> Result<()> {
+    pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         self.stream.write_all(frame.serialize().as_bytes()).await?;
         self.stream.flush().await?;
 
