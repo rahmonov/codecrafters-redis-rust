@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub struct RedisServer {
-    replication: ReplicationConfig,
+    pub replication: Arc<Mutex<ReplicationConfig>>,
     config: Config,
     db: Arc<Mutex<HashMap<String, DbItem>>>,
 }
@@ -28,14 +28,14 @@ pub struct RedisServer {
 impl RedisServer {
     pub fn new(config: Config, db: Arc<Mutex<Db>>) -> Self {
         RedisServer {
-            replication: ReplicationConfig::from_config(&config),
+            replication: Arc::new(Mutex::new(ReplicationConfig::from_config(&config))),
             config,
             db,
         }
     }
 
-    pub fn is_master(&self) -> bool {
-        self.replication.role == ReplRole::Master
+    pub async fn is_master(&self) -> bool {
+        self.replication.lock().await.role == ReplRole::Master
     }
 
     pub async fn listen(&self) -> TcpListener {
@@ -75,37 +75,34 @@ impl RedisServer {
     }
 
     pub async fn handle_connection(&self, mut conn: Connection, sender: Arc<Sender<Frame>>) {
-        println!("[{}] handling new connection...", self.replication.role);
+        let is_master = {
+            let guard = self.replication.lock().await;
+            guard.role.clone() == ReplRole::Master
+        };
+        println!("handling new connection...");
 
         loop {
             let Ok(Some(frames)) = conn.read_frames().await else {
-                println!("[{}] got nothing, stopping reading", self.replication.role);
+                println!("got nothing, stopping reading");
                 break;
             };
 
-            println!("[{}] Got request value {:?}", self.replication.role, frames);
+            println!("Got request value {:?}", frames);
 
             let actionable_frames: Vec<_> = frames
                 .into_iter()
-                .filter(|f| !matches!(f, Frame::RDBContents()))
+                .filter(|(f, _)| !matches!(f, Frame::RDBContents()))
                 .collect();
 
-            for frame in actionable_frames {
+            for (frame, consumed_bytes) in actionable_frames {
                 let sender = Arc::clone(&sender);
                 let (command, args) = extract_command(frame.clone()).unwrap();
 
                 match command.to_uppercase().as_str() {
-                    "PING" => handle_ping(&mut conn).await,
+                    "PING" => handle_ping(&mut conn, is_master).await,
                     "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
                     "SET" => {
-                        handle_set(
-                            &mut conn,
-                            Arc::clone(&self.db),
-                            frame,
-                            sender,
-                            self.is_master(),
-                        )
-                        .await
+                        handle_set(&mut conn, Arc::clone(&self.db), frame, sender, is_master).await
                     }
                     "GET" => handle_get(&mut conn, Arc::clone(&self.db), args[0].clone()).await,
                     "CONFIG" => {
@@ -113,11 +110,23 @@ impl RedisServer {
                             .await
                     }
                     "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
-                    "INFO" => handle_info(&mut conn, &self.replication).await,
-                    "REPLCONF" => handle_replconf(&mut conn, &args).await,
-                    "PSYNC" => handle_psync(&mut conn, &self.replication, sender).await,
+                    "INFO" => handle_info(&mut conn, Arc::clone(&self.replication)).await,
+                    "REPLCONF" => {
+                        handle_replconf(&mut conn, Arc::clone(&self.replication), &args).await
+                    }
+                    "PSYNC" => handle_psync(&mut conn, Arc::clone(&self.replication), sender).await,
                     c => panic!("Cannot handle command {}", c),
                 };
+
+                {
+                    if !is_master {
+                        let mut repl_conf = self.replication.lock().await;
+
+                        repl_conf.slave_repl_offset = repl_conf
+                            .slave_repl_offset
+                            .map_or(Some(consumed_bytes), |offset| Some(offset + consumed_bytes));
+                    }
+                }
 
                 println!("response has been sent");
             }

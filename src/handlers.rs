@@ -14,18 +14,25 @@ pub async fn handle_echo(conn: &mut Connection, what: Frame) {
     conn.write_frame(&what).await.unwrap();
 }
 
-pub async fn handle_ping(conn: &mut Connection) {
-    conn.write_frame(&Frame::SimpleString("PONG".to_string()))
-        .await
-        .unwrap();
+pub async fn handle_ping(conn: &mut Connection, reply: bool) {
+    if reply {
+        conn.write_frame(&Frame::SimpleString("PONG".to_string()))
+            .await
+            .unwrap();
+    }
 }
 
 pub async fn handle_psync(
     conn: &mut Connection,
-    repl_conf: &ReplicationConfig,
+    repl_conf: Arc<Mutex<ReplicationConfig>>,
     sender: Arc<Sender<Frame>>,
 ) {
-    let resp = format!("FULLRESYNC {} 0", repl_conf.master_replid.as_ref().unwrap());
+    let master_replid = {
+        let guard = repl_conf.lock().await;
+        guard.master_replid.clone().unwrap()
+    };
+
+    let resp = format!("FULLRESYNC {} 0", master_replid);
     let resp_frame = Frame::SimpleString(resp);
 
     conn.write_frame(&resp_frame).await.unwrap();
@@ -50,7 +57,16 @@ pub async fn handle_psync(
     }
 }
 
-pub async fn handle_replconf(conn: &mut Connection, args: &[Frame]) {
+pub async fn handle_replconf(
+    conn: &mut Connection,
+    repl_conf: Arc<Mutex<ReplicationConfig>>,
+    args: &[Frame],
+) {
+    let slave_repl_offset = {
+        let guard = repl_conf.lock().await;
+        guard.slave_repl_offset.unwrap_or(0)
+    };
+
     let arg = args.first().clone().unwrap();
 
     match unpack_bulk_str(arg.to_owned()).unwrap().as_str() {
@@ -58,7 +74,7 @@ pub async fn handle_replconf(conn: &mut Connection, args: &[Frame]) {
             let resp_frame = Frame::Array(vec![
                 Frame::SimpleString("REPLCONF".to_string()),
                 Frame::SimpleString("ACK".to_string()),
-                Frame::SimpleString("0".to_string()),
+                Frame::SimpleString(slave_repl_offset.to_string()),
             ]);
             conn.write_frame(&resp_frame).await.unwrap();
         }
@@ -69,8 +85,8 @@ pub async fn handle_replconf(conn: &mut Connection, args: &[Frame]) {
     }
 }
 
-pub async fn handle_info(conn: &mut Connection, replication_config: &ReplicationConfig) {
-    let repl_conf = replication_config;
+pub async fn handle_info(conn: &mut Connection, replication_config: Arc<Mutex<ReplicationConfig>>) {
+    let repl_conf = replication_config.lock().await;
     let mut result_values = vec![format!("role:{}", repl_conf.role)];
 
     match repl_conf.role {
@@ -166,6 +182,7 @@ pub async fn handle_set(
             .unwrap();
     }
 
+    println!("sending the frame: {frame:?}");
     sender.send(frame).unwrap();
 }
 

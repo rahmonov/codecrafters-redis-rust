@@ -29,7 +29,7 @@ async fn main() {
     let (sender, _rx) = broadcast::channel(16);
     let sender = Arc::new(sender);
 
-    if server.is_master() {
+    if server.is_master().await {
         server.load_rdb().await;
     }
 

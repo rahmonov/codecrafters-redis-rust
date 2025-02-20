@@ -17,21 +17,21 @@ impl Connection {
         }
     }
 
-    pub async fn read_frames(&mut self) -> Result<Option<Vec<Frame>>> {
+    pub async fn read_frames(&mut self) -> Result<Option<Vec<(Frame, usize)>>> {
         let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
 
         if bytes_read == 0 {
             return Ok(None);
         }
 
-        let mut frames: Vec<Frame> = vec![];
+        let mut frames: Vec<(Frame, usize)> = vec![];
         let mut consumed_bytes = 0;
 
         while consumed_bytes != bytes_read {
             let (frame, bytes) =
                 Frame::parse_message(BytesMut::from(&self.buffer[consumed_bytes..]))?;
 
-            frames.push(frame.clone());
+            frames.push((frame, bytes));
             consumed_bytes += bytes;
         }
 
