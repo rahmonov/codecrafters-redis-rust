@@ -67,7 +67,6 @@ fn parse_array(buffer: BytesMut) -> Result<(Frame, usize)> {
         bytes_consumed += len;
     }
 
-    println!("bytes consumed: {bytes_consumed}");
     Ok((Frame::Array(items), bytes_consumed))
 }
 
