@@ -50,9 +50,23 @@ pub async fn handle_psync(
     }
 }
 
-pub async fn handle_replconf(conn: &mut Connection) {
-    let resp_frame = Frame::SimpleString("OK".to_string());
-    conn.write_frame(&resp_frame).await.unwrap();
+pub async fn handle_replconf(conn: &mut Connection, args: &[Frame]) {
+    let arg = args.first().clone().unwrap();
+
+    match unpack_bulk_str(arg.to_owned()).unwrap().as_str() {
+        "GETACK" => {
+            let resp_frame = Frame::Array(vec![
+                Frame::SimpleString("REPLCONF".to_string()),
+                Frame::SimpleString("ACK".to_string()),
+                Frame::SimpleString("0".to_string()),
+            ]);
+            conn.write_frame(&resp_frame).await.unwrap();
+        }
+        _ => {
+            let resp_frame = Frame::SimpleString("OK".to_string());
+            conn.write_frame(&resp_frame).await.unwrap();
+        }
+    }
 }
 
 pub async fn handle_info(conn: &mut Connection, replication_config: &ReplicationConfig) {

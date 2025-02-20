@@ -114,7 +114,7 @@ impl RedisServer {
                     }
                     "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
                     "INFO" => handle_info(&mut conn, &self.replication).await,
-                    "REPLCONF" => handle_replconf(&mut conn).await,
+                    "REPLCONF" => handle_replconf(&mut conn, &args).await,
                     "PSYNC" => handle_psync(&mut conn, &self.replication, sender).await,
                     c => panic!("Cannot handle command {}", c),
                 };
