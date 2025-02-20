@@ -29,14 +29,22 @@ async fn main() {
     let (sender, _rx) = broadcast::channel(16);
     let sender = Arc::new(sender);
 
-    // todo: should this happen only with master?
-    server.load_rdb().await;
+    if server.is_master() {
+        server.load_rdb().await;
+    }
 
     match server.connect_to_master().await {
         Ok(stream) => {
             if let Some(stream) = stream {
-                let conn_to_master = Connection::new(stream);
-                server.handshake_master(conn_to_master).await;
+                let mut conn_to_master = Connection::new(stream);
+                server.handshake_master(&mut conn_to_master).await;
+
+                let server = Arc::clone(&server);
+                let sender = Arc::clone(&sender);
+
+                tokio::spawn(async move {
+                    server.handle_connection(conn_to_master, sender).await;
+                });
             }
         }
         Err(e) => panic!("Error connecting to master: {e}"),

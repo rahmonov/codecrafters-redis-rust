@@ -16,7 +16,7 @@ use crate::{
         handle_ping, handle_psync, handle_replconf, handle_set,
     },
     rdb,
-    replication::ReplicationConfig,
+    replication::{ReplRole, ReplicationConfig},
 };
 
 pub struct RedisServer {
@@ -34,6 +34,10 @@ impl RedisServer {
         }
     }
 
+    pub fn is_master(&self) -> bool {
+        self.replication.role == ReplRole::Master
+    }
+
     pub async fn listen(&self) -> TcpListener {
         let addr = format!("127.0.0.1:{}", self.config.port);
         let listener = TcpListener::bind(addr.clone()).await.unwrap();
@@ -44,11 +48,14 @@ impl RedisServer {
 
     pub async fn connect_to_master(&self) -> Result<Option<TcpStream>> {
         if let Some(replicaof) = self.config.replicaof.clone() {
+            println!(
+                "replica at {} connecting to master at {}",
+                self.config.port, replicaof
+            );
             let stream = TcpStream::connect(replicaof).await?;
             return Ok(Some(stream));
         }
 
-        println!("not connecting to master...already the master");
         Ok(None)
     }
 
@@ -68,42 +75,57 @@ impl RedisServer {
     }
 
     pub async fn handle_connection(&self, mut conn: Connection, sender: Arc<Sender<Frame>>) {
-        println!("Handling new connection...");
+        println!("[{}] handling new connection...", self.replication.role);
 
         loop {
-            let Ok(Some(frame)) = conn.read_frame().await else {
-                println!("got nothing, stopping reading");
+            let Ok(Some(frames)) = conn.read_frames().await else {
+                println!("[{}] got nothing, stopping reading", self.replication.role);
                 break;
             };
 
-            println!("Got request value {:?}", frame);
+            println!("[{}] Got request value {:?}", self.replication.role, frames);
 
-            let sender = Arc::clone(&sender);
+            let actionable_frames: Vec<_> = frames
+                .into_iter()
+                .filter(|f| !matches!(f, Frame::RDBContents()))
+                .collect();
 
-            // todo: maybe do this inside each handler, it would avoid the clone here
-            let (command, args) = extract_command(frame.clone()).unwrap();
+            for frame in actionable_frames {
+                let sender = Arc::clone(&sender);
+                let (command, args) = extract_command(frame.clone()).unwrap();
 
-            match command.to_uppercase().as_str() {
-                "PING" => handle_ping(&mut conn).await,
-                "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
-                "SET" => handle_set(&mut conn, Arc::clone(&self.db), frame, sender).await,
-                "GET" => handle_get(&mut conn, Arc::clone(&self.db), args[0].clone()).await,
-                "CONFIG" => {
-                    handle_config(&mut conn, &self.config, args[0].clone(), args[1].clone()).await
-                }
-                "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
-                "INFO" => handle_info(&mut conn, &self.replication).await,
-                "REPLCONF" => handle_replconf(&mut conn).await,
-                "PSYNC" => handle_psync(&mut conn, &self.replication, sender).await,
-                c => panic!("Cannot handle command {}", c),
-            };
+                match command.to_uppercase().as_str() {
+                    "PING" => handle_ping(&mut conn).await,
+                    "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
+                    "SET" => {
+                        handle_set(
+                            &mut conn,
+                            Arc::clone(&self.db),
+                            frame,
+                            sender,
+                            self.is_master(),
+                        )
+                        .await
+                    }
+                    "GET" => handle_get(&mut conn, Arc::clone(&self.db), args[0].clone()).await,
+                    "CONFIG" => {
+                        handle_config(&mut conn, &self.config, args[0].clone(), args[1].clone())
+                            .await
+                    }
+                    "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
+                    "INFO" => handle_info(&mut conn, &self.replication).await,
+                    "REPLCONF" => handle_replconf(&mut conn).await,
+                    "PSYNC" => handle_psync(&mut conn, &self.replication, sender).await,
+                    c => panic!("Cannot handle command {}", c),
+                };
 
-            println!("response has been sent");
+                println!("response has been sent");
+            }
         }
     }
 
     // TODO: check results of TCP requests (PONG, OK, OK)
-    pub async fn handshake_master(&self, mut conn: Connection) {
+    pub async fn handshake_master(&self, conn: &mut Connection) {
         println!("Starting handshake with master...");
 
         // Step 1: Send PING
@@ -112,7 +134,7 @@ impl RedisServer {
             .await
             .expect("PING didn't succeed");
 
-        let _frame = conn.read_frame().await.unwrap();
+        let _frame = conn.read_frames().await.unwrap();
         println!("PING succeeded");
 
         // Step 2.1: Send REPLCONF listening-port <port>
@@ -125,7 +147,7 @@ impl RedisServer {
             .await
             .expect("REPLCONF with listening port didn't succeed");
 
-        let _frame = conn.read_frame().await.unwrap();
+        let _frame = conn.read_frames().await.unwrap();
         println!("Handshake Step 2.1 [REPLCONF with listening port] succeeded");
 
         // Step 2.2: Send REPLCONF capa psync2
@@ -138,7 +160,7 @@ impl RedisServer {
             .await
             .expect("REPLCONF with capabilities didn't succeed");
 
-        let _frame = conn.read_frame().await.unwrap();
+        let _frame = conn.read_frames().await.unwrap();
         println!("Handshake Step 2.2 [REPLCONF with capabilities] succeeded");
 
         // Step 3: Send PSYNC
@@ -151,7 +173,7 @@ impl RedisServer {
             .await
             .expect("PSYNC didn't succeed");
 
-        let _frame = conn.read_frame().await.unwrap();
+        let _frame = conn.read_frames().await.unwrap();
         println!("Handshake Step 3 [PSYNC] succeeded");
     }
 }

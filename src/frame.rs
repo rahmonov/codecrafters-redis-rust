@@ -6,6 +6,7 @@ pub enum Frame {
     SimpleString(String),
     BulkString(String),
     Array(Vec<Frame>),
+    RDBContents(),
     NullBulkString,
 }
 
@@ -14,6 +15,7 @@ impl Frame {
         match self {
             Frame::SimpleString(s) => format!("+{}\r\n", s),
             Frame::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),
+            Frame::RDBContents() => format!("$1\r\nrdbcontents\r\n"),
             Frame::NullBulkString => "$-1\r\n".to_string(),
             Frame::Array(values) => format!(
                 "*{}\r\n{}",
@@ -65,9 +67,12 @@ fn parse_array(buffer: BytesMut) -> Result<(Frame, usize)> {
         bytes_consumed += len;
     }
 
+    println!("bytes consumed: {bytes_consumed}");
     Ok((Frame::Array(items), bytes_consumed))
 }
 
+// this could either be a bulk string or RDB file contents
+// they look very similar (e.g. start with $)
 fn parse_bulk_string(buffer: BytesMut) -> Result<(Frame, usize)> {
     let (bulk_str_len, bytes_consumed) = if let Some((line, len)) = read_until_crlf(&buffer[1..]) {
         let bulk_str_len = parse_int(line)?;
@@ -78,14 +83,16 @@ fn parse_bulk_string(buffer: BytesMut) -> Result<(Frame, usize)> {
     };
 
     let end_of_bulk_str = bytes_consumed + bulk_str_len as usize;
-    let total_parsed = end_of_bulk_str + 2;
+    let content = &buffer[bytes_consumed..end_of_bulk_str];
 
-    Ok((
-        Frame::BulkString(String::from_utf8(
-            buffer[bytes_consumed..end_of_bulk_str].to_vec(),
-        )?),
-        total_parsed,
-    ))
+    if content.len() >= 9 && content.starts_with(b"REDIS") {
+        Ok((Frame::RDBContents(), end_of_bulk_str))
+    } else {
+        Ok((
+            Frame::BulkString(String::from_utf8(content.to_vec())?),
+            end_of_bulk_str + 2, // because bulk strings contain \r\n at the end
+        ))
+    }
 }
 
 fn read_until_crlf(buffer: &[u8]) -> Option<(&[u8], usize)> {

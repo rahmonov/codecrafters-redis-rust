@@ -2,6 +2,7 @@ use core::fmt;
 
 use crate::config::Config;
 
+#[derive(PartialEq, Eq)]
 pub enum ReplRole {
     Master,
     Slave,

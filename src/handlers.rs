@@ -118,6 +118,7 @@ pub async fn handle_set(
     db: Arc<Mutex<Db>>,
     frame: Frame,
     sender: Arc<Sender<Frame>>,
+    reply: bool,
 ) {
     let mut db = db.lock().await;
     let (_, args) = extract_command(frame.clone()).unwrap();
@@ -145,9 +146,11 @@ pub async fn handle_set(
 
     db.insert(key, item);
 
-    conn.write_frame(&Frame::SimpleString("OK".to_string()))
-        .await
-        .unwrap();
+    if reply {
+        conn.write_frame(&Frame::SimpleString("OK".to_string()))
+            .await
+            .unwrap();
+    }
 
     sender.send(frame).unwrap();
 }
