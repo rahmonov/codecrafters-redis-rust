@@ -74,7 +74,12 @@ impl RedisServer {
         }
     }
 
-    pub async fn handle_connection(&self, mut conn: Connection, sender: Arc<Sender<Frame>>) {
+    pub async fn handle_connection(
+        &self,
+        mut conn: Connection,
+        sender: Arc<Sender<Frame>>,
+        respond: bool,
+    ) {
         let is_master = {
             let guard = self.replication.lock().await;
             guard.role.clone() == ReplRole::Master
@@ -99,10 +104,10 @@ impl RedisServer {
                 let (command, args) = extract_command(frame.clone()).unwrap();
 
                 match command.to_uppercase().as_str() {
-                    "PING" => handle_ping(&mut conn, is_master).await,
+                    "PING" => handle_ping(&mut conn, respond).await,
                     "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
                     "SET" => {
-                        handle_set(&mut conn, Arc::clone(&self.db), frame, sender, is_master).await
+                        handle_set(&mut conn, Arc::clone(&self.db), frame, sender, respond).await
                     }
                     "GET" => handle_get(&mut conn, Arc::clone(&self.db), args[0].clone()).await,
                     "CONFIG" => {
@@ -112,7 +117,8 @@ impl RedisServer {
                     "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
                     "INFO" => handle_info(&mut conn, Arc::clone(&self.replication)).await,
                     "REPLCONF" => {
-                        handle_replconf(&mut conn, Arc::clone(&self.replication), &args).await
+                        handle_replconf(&mut conn, Arc::clone(&self.replication), &args, respond)
+                            .await
                     }
                     "PSYNC" => handle_psync(&mut conn, Arc::clone(&self.replication), sender).await,
                     c => panic!("Cannot handle command {}", c),
@@ -143,7 +149,7 @@ impl RedisServer {
             .await
             .expect("PING didn't succeed");
 
-        let _frame = conn.read_frames().await.unwrap();
+        // let _frame = conn.read_frames().await.unwrap();
         println!("PING succeeded");
 
         // Step 2.1: Send REPLCONF listening-port <port>
@@ -182,7 +188,15 @@ impl RedisServer {
             .await
             .expect("PSYNC didn't succeed");
 
-        let _frame = conn.read_frames().await.unwrap();
+        while let Ok(Some(frames)) = conn.read_frames().await {
+            if frames
+                .iter()
+                .any(|(f, _)| matches!(f, Frame::RDBContents()))
+            {
+                break;
+            }
+        }
+        // conn.read_frames().await.unwrap();
         println!("Handshake Step 3 [PSYNC] succeeded");
     }
 }

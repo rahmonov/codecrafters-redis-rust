@@ -61,6 +61,7 @@ pub async fn handle_replconf(
     conn: &mut Connection,
     repl_conf: Arc<Mutex<ReplicationConfig>>,
     args: &[Frame],
+    respond: bool,
 ) {
     let slave_repl_offset = {
         let guard = repl_conf.lock().await;
@@ -79,8 +80,10 @@ pub async fn handle_replconf(
             conn.write_frame(&resp_frame).await.unwrap();
         }
         _ => {
-            let resp_frame = Frame::SimpleString("OK".to_string());
-            conn.write_frame(&resp_frame).await.unwrap();
+            if respond {
+                let resp_frame = Frame::SimpleString("OK".to_string());
+                conn.write_frame(&resp_frame).await.unwrap();
+            }
         }
     }
 }

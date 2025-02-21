@@ -33,6 +33,8 @@ async fn main() {
         server.load_rdb().await;
     }
 
+    let listener = server.listen().await;
+
     match server.connect_to_master().await {
         Ok(stream) => {
             if let Some(stream) = stream {
@@ -43,14 +45,14 @@ async fn main() {
                 let sender = Arc::clone(&sender);
 
                 tokio::spawn(async move {
-                    server.handle_connection(conn_to_master, sender).await;
+                    server
+                        .handle_connection(conn_to_master, sender, false)
+                        .await;
                 });
             }
         }
         Err(e) => panic!("Error connecting to master: {e}"),
     }
-
-    let listener = server.listen().await;
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();
@@ -60,7 +62,7 @@ async fn main() {
         let sender = Arc::clone(&sender);
 
         tokio::spawn(async move {
-            server.handle_connection(conn, sender).await;
+            server.handle_connection(conn, sender, true).await;
         });
     }
 }
