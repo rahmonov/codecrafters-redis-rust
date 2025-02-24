@@ -39,7 +39,11 @@ async fn main() {
         Ok(stream) => {
             if let Some(stream) = stream {
                 let mut conn_to_master = Connection::new(stream);
-                server.handshake_master(&mut conn_to_master).await;
+                let sender_for_handshake = Arc::clone(&sender);
+
+                server
+                    .handshake_master(&mut conn_to_master, sender_for_handshake)
+                    .await;
 
                 let server = Arc::clone(&server);
                 let sender = Arc::clone(&sender);

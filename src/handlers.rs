@@ -185,7 +185,6 @@ pub async fn handle_set(
             .unwrap();
     }
 
-    println!("sending the frame: {frame:?}");
     sender.send(frame).unwrap();
 }
 

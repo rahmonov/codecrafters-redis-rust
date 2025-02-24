@@ -80,10 +80,6 @@ impl RedisServer {
         sender: Arc<Sender<Frame>>,
         respond: bool,
     ) {
-        let is_master = {
-            let guard = self.replication.lock().await;
-            guard.role.clone() == ReplRole::Master
-        };
         println!("handling new connection...");
 
         loop {
@@ -92,55 +88,61 @@ impl RedisServer {
                 break;
             };
 
-            println!("Got request value {:?}", frames);
-
-            let actionable_frames: Vec<_> = frames
-                .into_iter()
-                .filter(|(f, _)| !matches!(f, Frame::RDBContents()))
-                .collect();
-
-            for (frame, consumed_bytes) in actionable_frames {
+            for (frame, consumed_bytes) in frames {
                 let sender = Arc::clone(&sender);
-                let (command, args) = extract_command(frame.clone()).unwrap();
 
-                match command.to_uppercase().as_str() {
-                    "PING" => handle_ping(&mut conn, respond).await,
-                    "ECHO" => handle_echo(&mut conn, args.first().unwrap().clone()).await,
-                    "SET" => {
-                        handle_set(&mut conn, Arc::clone(&self.db), frame, sender, respond).await
-                    }
-                    "GET" => handle_get(&mut conn, Arc::clone(&self.db), args[0].clone()).await,
-                    "CONFIG" => {
-                        handle_config(&mut conn, &self.config, args[0].clone(), args[1].clone())
-                            .await
-                    }
-                    "KEYS" => handle_keys(&mut conn, Arc::clone(&self.db)).await,
-                    "INFO" => handle_info(&mut conn, Arc::clone(&self.replication)).await,
-                    "REPLCONF" => {
-                        handle_replconf(&mut conn, Arc::clone(&self.replication), &args, respond)
-                            .await
-                    }
-                    "PSYNC" => handle_psync(&mut conn, Arc::clone(&self.replication), sender).await,
-                    c => panic!("Cannot handle command {}", c),
-                };
-
-                {
-                    if !is_master {
-                        let mut repl_conf = self.replication.lock().await;
-
-                        repl_conf.slave_repl_offset = repl_conf
-                            .slave_repl_offset
-                            .map_or(Some(consumed_bytes), |offset| Some(offset + consumed_bytes));
-                    }
-                }
-
-                println!("response has been sent");
+                self.process_frame(&mut conn, frame, consumed_bytes, sender, respond)
+                    .await;
             }
         }
     }
 
-    // TODO: check results of TCP requests (PONG, OK, OK)
-    pub async fn handshake_master(&self, conn: &mut Connection) {
+    async fn process_frame(
+        &self,
+        conn: &mut Connection,
+        frame: Frame,
+        consumed_bytes: usize,
+        sender: Arc<Sender<Frame>>,
+        respond: bool,
+    ) {
+        println!("Processing frame: {:?}", frame);
+
+        if matches!(frame, Frame::RDBContents()) {
+            println!("Got RDB Frame. Ignoring");
+            return;
+        }
+
+        let (command, args) = extract_command(frame.clone()).unwrap();
+
+        match command.to_uppercase().as_str() {
+            "PING" => handle_ping(conn, respond).await,
+            "ECHO" => handle_echo(conn, args.first().unwrap().clone()).await,
+            "SET" => handle_set(conn, Arc::clone(&self.db), frame, sender, respond).await,
+            "GET" => handle_get(conn, Arc::clone(&self.db), args[0].clone()).await,
+            "CONFIG" => handle_config(conn, &self.config, args[0].clone(), args[1].clone()).await,
+            "KEYS" => handle_keys(conn, Arc::clone(&self.db)).await,
+            "INFO" => handle_info(conn, Arc::clone(&self.replication)).await,
+            "REPLCONF" => {
+                handle_replconf(conn, Arc::clone(&self.replication), &args, respond).await
+            }
+            "PSYNC" => handle_psync(conn, Arc::clone(&self.replication), sender).await,
+            c => panic!("Cannot handle command {}", c),
+        };
+
+        {
+            let mut repl_conf = self.replication.lock().await;
+
+            if repl_conf.role == ReplRole::Slave {
+                repl_conf.slave_repl_offset = repl_conf
+                    .slave_repl_offset
+                    .map_or(Some(consumed_bytes), |offset| Some(offset + consumed_bytes));
+            }
+        }
+
+        println!("Frame response has been sent");
+    }
+
+    pub async fn handshake_master(&self, conn: &mut Connection, sender: Arc<Sender<Frame>>) {
         println!("Starting handshake with master...");
 
         // Step 1: Send PING
@@ -149,8 +151,8 @@ impl RedisServer {
             .await
             .expect("PING didn't succeed");
 
-        // let _frame = conn.read_frames().await.unwrap();
-        println!("PING succeeded");
+        let _frame = conn.read_frames().await.unwrap();
+        println!("[Handshake Step 1] PING succeeded");
 
         // Step 2.1: Send REPLCONF listening-port <port>
         let replconf_cmd = Frame::Array(vec![
@@ -188,15 +190,14 @@ impl RedisServer {
             .await
             .expect("PSYNC didn't succeed");
 
-        while let Ok(Some(frames)) = conn.read_frames().await {
-            if frames
-                .iter()
-                .any(|(f, _)| matches!(f, Frame::RDBContents()))
-            {
-                break;
-            }
+        let Ok(Some(frames)) = conn.read_frames().await else {
+            panic!("Handshake failed after sending PSYNC.");
+        };
+
+        for (frame, consumed_bytes) in frames.into_iter().skip(2) {
+            self.process_frame(conn, frame, consumed_bytes, Arc::clone(&sender), false)
+                .await;
         }
-        // conn.read_frames().await.unwrap();
         println!("Handshake Step 3 [PSYNC] succeeded");
     }
 }
